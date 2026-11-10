@@ -11,7 +11,7 @@ mod common;
 
 use common::{AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
 use ejson::{FileFormat, Scheme};
-use ejsonkms::{Client, EjsonKmsError, KeygenOptions, KmsError};
+use ejsonkms::{Client, EjsonKmsError, KeyBinding, KeygenOptions, KmsError};
 use serde_json::json;
 
 #[test]
@@ -137,6 +137,37 @@ async fn library_api(kms: &MockKms) {
         .decrypt(&v2_secrets)
         .await
         .expect("v2 decrypt should succeed");
+    let decrypted: serde_json::Value = serde_json::from_slice(&decrypted).unwrap();
+    assert_eq!(decrypted["environment"]["my_secret"], "secret123");
+
+    // --- a key bound to its public key ---
+    assert_eq!(keys.binding, KeyBinding::Unbound);
+    let bound_keys = client
+        .keygen(
+            KMS_KEY_ID,
+            &KeygenOptions::default().binding(KeyBinding::PublicKey),
+        )
+        .await
+        .expect("bound keygen should succeed");
+    assert_eq!(bound_keys.binding, KeyBinding::PublicKey);
+    let (_, context) = common::unwrap(&bound_keys.private_key_enc);
+    assert_eq!(
+        context,
+        json!({ "ejsonkms_public_key": bound_keys.public_key })
+    );
+
+    let bound_secrets = dir.path().join("bound.ejson");
+    let mut document: serde_json::Value =
+        serde_json::from_str(&bound_keys.to_document(FileFormat::Json).unwrap()).unwrap();
+    assert_eq!(document["_kms_encryption_context"], "public_key");
+    document["environment"] = json!({ "my_secret": "secret123" });
+    std::fs::write(&bound_secrets, document.to_string()).unwrap();
+    ejson::encrypt_file_in_place(&bound_secrets).unwrap();
+
+    let decrypted = client
+        .decrypt(&bound_secrets)
+        .await
+        .expect("bound decrypt should succeed");
     let decrypted: serde_json::Value = serde_json::from_slice(&decrypted).unwrap();
     assert_eq!(decrypted["environment"]["my_secret"], "secret123");
 

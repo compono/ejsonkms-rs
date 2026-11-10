@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use ejson::Scheme;
-use ejsonkms::{Client, KeygenOptions};
+use ejsonkms::{Client, KeyBinding, KeygenOptions};
 
 #[derive(Parser)]
 #[command(
@@ -101,7 +101,11 @@ impl KeygenArgs {
     pub(crate) fn options(&self) -> KeygenOptions {
         KeygenOptions::default()
             .scheme(if self.pqc { Scheme::V2 } else { self.scheme })
-            .bind_public_key(self.bind_public_key)
+            .binding(if self.bind_public_key {
+                KeyBinding::PublicKey
+            } else {
+                KeyBinding::Unbound
+            })
     }
 }
 

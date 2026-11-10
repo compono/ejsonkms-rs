@@ -7,10 +7,30 @@ use std::path::Path;
 use ejson::FileFormat;
 use serde::{Deserialize, Serialize};
 
-use crate::EjsonKmsError;
+use crate::{EjsonKmsError, KeyBinding};
 
 /// The `_kms_encryption_context` value for a key bound to `_public_key`.
 const BOUND_TO_PUBLIC_KEY: &str = "public_key";
+
+/// What a file's `_kms_encryption_context` (or its absence) says the key is
+/// bound to.
+fn binding_from_marker(marker: Option<&str>) -> Result<KeyBinding, EjsonKmsError> {
+    match marker {
+        None => Ok(KeyBinding::Unbound),
+        Some(BOUND_TO_PUBLIC_KEY) => Ok(KeyBinding::PublicKey),
+        Some(other) => Err(EjsonKmsError::UnsupportedEncryptionContext(
+            other.to_string(),
+        )),
+    }
+}
+
+/// The `_kms_encryption_context` to write for `binding`, if any.
+fn marker_for(binding: KeyBinding) -> Option<&'static str> {
+    match binding {
+        KeyBinding::Unbound => None,
+        KeyBinding::PublicKey => Some(BOUND_TO_PUBLIC_KEY),
+    }
+}
 
 #[derive(Serialize)]
 struct EjsonKmsFile<'a> {
@@ -30,13 +50,13 @@ struct EjsonKmsFile<'a> {
 pub(crate) fn render(
     public_key: &str,
     private_key_enc: &str,
-    bound_to_public_key: bool,
+    binding: KeyBinding,
     format: FileFormat,
 ) -> Result<String, EjsonKmsError> {
     let file = EjsonKmsFile {
         public_key,
         private_key_enc,
-        encryption_context: bound_to_public_key.then_some(BOUND_TO_PUBLIC_KEY),
+        encryption_context: marker_for(binding),
     };
     match format {
         FileFormat::Json => serde_json::to_string_pretty(&file).map_err(EjsonKmsError::json),
@@ -112,19 +132,14 @@ pub(crate) fn extract_private_key_enc(
         .filter(|key| !key.is_empty())
         .ok_or(EjsonKmsError::MissingPrivateKeyEnc)?;
 
-    let bound_public_key = match fields.encryption_context.as_deref() {
-        None => None,
-        Some(BOUND_TO_PUBLIC_KEY) => Some(
+    let bound_public_key = match binding_from_marker(fields.encryption_context.as_deref())? {
+        KeyBinding::Unbound => None,
+        KeyBinding::PublicKey => Some(
             fields
                 .public_key
                 .filter(|key| !key.is_empty())
                 .ok_or(EjsonKmsError::MissingPublicKey)?,
         ),
-        Some(other) => {
-            return Err(EjsonKmsError::UnsupportedEncryptionContext(
-                other.to_string(),
-            ));
-        }
     };
 
     Ok(WrappedKey {

@@ -31,4 +31,4 @@ mod kms;
 
 pub use client::{Client, ClientBuilder};
 pub use error::{EjsonKmsError, KmsError, SourceError};
-pub use keys::{EjsonKmsKeys, KeygenOptions};
+pub use keys::{EjsonKmsKeys, KeyBinding, KeygenOptions};

@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 
 use crate::document::{detect_format, extract_private_key_enc, read_file_checked};
 use crate::kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms, new_kms_client};
-use crate::{EjsonKmsError, EjsonKmsKeys, KeygenOptions};
+use crate::{EjsonKmsError, EjsonKmsKeys, KeyBinding, KeygenOptions};
 
 /// Generates keypairs and decrypts secrets files, using AWS KMS to wrap and
 /// unwrap the private key.
@@ -68,21 +68,21 @@ impl Client {
             ..
         } = ejson::generate_keypair(scheme);
 
-        let bound_to_public_key = options.bind_public_key;
-        let private_key_enc = encrypt_private_key_with_kms(
-            &self.kms,
-            &private_key,
-            kms_key_id,
-            bound_to_public_key.then_some(public_key.as_str()),
-        )
-        .await?;
+        let binding = options.binding;
+        let bound_public_key = match binding {
+            KeyBinding::Unbound => None,
+            KeyBinding::PublicKey => Some(public_key.as_str()),
+        };
+        let private_key_enc =
+            encrypt_private_key_with_kms(&self.kms, &private_key, kms_key_id, bound_public_key)
+                .await?;
 
         Ok(EjsonKmsKeys {
             public_key,
             private_key_enc,
             private_key,
             scheme,
-            bound_to_public_key,
+            binding,
         })
     }
 
