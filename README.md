@@ -50,13 +50,16 @@ Generating an EJSON file:
 
 ```
 $ ejsonkms keygen --aws-region us-east-1 --kms-key-id bc436485-5092-42b8-92a3-0aa8b93536dc -o secrets.ejson
-Private Key: ae5969d1fb70faab76198ee554bf91d2fffc44d027ea3d804a7c7f92876d518b
 $ cat secrets.ejson
 {
   "_public_key": "6b8280f86aff5f48773f63d60e655e2f3dd0dd7c14f5fecb5df22936e5a3be52",
   "_private_key_enc": "S2Fybjphd3M6a21zOnVzLWVhc3QtMToxMTExMjIyMjMzMzM6a2V5L2JjNDM2NDg1LTUwOTItNDJiOC05MmEzLTBhYThiOTM1MzZkYwAAAAAycRX5OBx6xGuYOPAmDJ1FombB1lFybMP42s7PGmoa24bAesPMMZtI9V0w0p0lEgLeeSvYdsPuoPROa4bwnQxJB28eC6fHgfWgY7jgDWY9uP/tgzuWL3zuIaq+9Q=="
 }
 ```
+
+The private key is not printed: the file already holds it, encrypted with KMS, and that copy is all
+`ejsonkms` needs. Pass `--show-private-key` to also print it as `Private Key: ...` (for example to keep an
+offline backup); treat that output as a secret.
 
 > [!NOTE]
 > If the `AWS_REGION` environment variable is set, it will be used implicitly for `--aws-region` when the

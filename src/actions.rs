@@ -138,8 +138,13 @@ struct EjsonKmsFile {
 
 /// Generate a new EJSON keypair, encrypting the private key with KMS.
 ///
-/// Prints the private key to stdout and writes the EJSON file to `out_file`
-/// (or stdout if `None`).
+/// Writes the EJSON file to `out_file` (or stdout if `None`).
+///
+/// The private key is not shown unless `show_private_key` is set: it is
+/// already in the file, encrypted with KMS, and anything printed ends up in
+/// terminal scrollback and CI logs. When it is set, stdout carries
+/// `Private Key: ...` first and, if the file also goes to stdout, an
+/// `EJSON File:` line before it.
 ///
 /// The output format follows the extension of `out_file` (`.eyaml` -> YAML,
 /// `.etoml` -> TOML, ...); JSON is used for stdout or unrecognized extensions.
@@ -150,6 +155,7 @@ pub async fn keygen_action(
     kms_key_id: &str,
     aws_region: &str,
     out_file: Option<&str>,
+    show_private_key: bool,
 ) -> Result<(), EjsonKmsError> {
     // Fail before asking KMS for anything; `create_new` below still guards
     // against the file appearing in the meantime.
@@ -195,10 +201,14 @@ pub async fn keygen_action(
         target.write_all(ejson_file.as_bytes())?;
     }
 
-    println!("Private Key: {}", ejson_kms_keys.private_key);
+    if show_private_key {
+        println!("Private Key: {}", ejson_kms_keys.private_key);
+    }
     if out_file.is_none() {
-        println!("EJSON File:");
-        std::io::stdout().write_all(ejson_file.as_bytes())?;
+        if show_private_key {
+            println!("EJSON File:");
+        }
+        println!("{}", ejson_file.trim_end());
     }
     Ok(())
 }
