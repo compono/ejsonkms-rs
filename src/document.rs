@@ -79,7 +79,15 @@ pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsErro
 /// reported beforehand, so a file that grows (or a device or pipe, which
 /// report no size) cannot be buffered without bound.
 pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsError> {
-    read_limited(std::fs::File::open(file_path)?, ejson::MAX_FILE_SIZE)
+    let read = || read_limited(std::fs::File::open(file_path)?, ejson::MAX_FILE_SIZE);
+    // Say which file: an I/O error on its own names none.
+    read().map_err(|err| match err {
+        EjsonKmsError::Io(source) => EjsonKmsError::ReadFile {
+            path: file_path.to_path_buf(),
+            source,
+        },
+        other => other,
+    })
 }
 
 fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>, EjsonKmsError> {
@@ -120,9 +128,8 @@ pub(crate) fn extract_private_key_enc(
     let fields: EjsonKmsFileFields = match format {
         FileFormat::Json => serde_json::from_slice(data).map_err(EjsonKmsError::json)?,
         FileFormat::Yaml => serde_norway::from_slice(data).map_err(EjsonKmsError::yaml)?,
-        FileFormat::Toml => {
-            toml::from_str(std::str::from_utf8(data)?).map_err(EjsonKmsError::toml)?
-        }
+        FileFormat::Toml => toml::from_str(std::str::from_utf8(data).map_err(EjsonKmsError::toml)?)
+            .map_err(EjsonKmsError::toml)?,
         // `FileFormat` may gain formats in a minor release of ejson.
         other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };
@@ -322,6 +329,29 @@ mod tests {
             read_limited(std::io::repeat(0), 1024),
             Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
         ));
+    }
+
+    #[test]
+    fn test_read_errors_name_the_file() {
+        let err = read_file_checked(Path::new("testdata/does_not_exist.ejson")).unwrap_err();
+        assert!(matches!(
+            &err,
+            EjsonKmsError::ReadFile { path, source }
+                if path == Path::new("testdata/does_not_exist.ejson")
+                    && source.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert!(
+            err.to_string()
+                .starts_with("testdata/does_not_exist.ejson: "),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_toml_that_is_not_utf8_is_a_toml_error() {
+        let err = extract_private_key_enc(&[0xff, 0xfe], FileFormat::Toml).unwrap_err();
+        assert!(matches!(err, EjsonKmsError::Toml(_)), "{err:?}");
+        assert!(err.to_string().starts_with("toml error: "), "{err}");
     }
 
     #[test]

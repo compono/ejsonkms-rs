@@ -1,5 +1,7 @@
 //! The errors ejsonkms reports.
 
+use std::path::PathBuf;
+
 use ejson::FileFormat;
 use thiserror::Error;
 
@@ -7,7 +9,16 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EjsonKmsError {
-    /// A file could not be read or written.
+    /// The secrets file could not be read.
+    #[error("{}: {source}", path.display())]
+    ReadFile {
+        /// The file that was being read.
+        path: PathBuf,
+        /// Why it could not be read.
+        source: std::io::Error,
+    },
+
+    /// Some other input or output failed, for example writing a result.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -19,13 +30,10 @@ pub enum EjsonKmsError {
     #[error("yaml error: {0}")]
     Yaml(SourceError),
 
-    /// The file could not be read or written as TOML.
+    /// The file could not be read or written as TOML (or, being TOML, is not
+    /// valid UTF-8).
     #[error("toml error: {0}")]
     Toml(SourceError),
-
-    /// A TOML file is not valid UTF-8.
-    #[error("utf-8 error: {0}")]
-    Utf8(#[from] std::str::Utf8Error),
 
     /// The file has no `_private_key_enc`, or it is empty, so there is no
     /// key to ask KMS for.

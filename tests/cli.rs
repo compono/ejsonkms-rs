@@ -605,7 +605,9 @@ fn decrypt_rejects_files_it_cannot_use_without_calling_kms() {
     let output = fixture.kms.run(&["decrypt", missing.to_str().unwrap()]);
     assert_eq!(output.code, Some(1));
     assert!(
-        output.stderr.starts_with("Decryption failed: io error: "),
+        output
+            .stderr
+            .starts_with(&format!("Decryption failed: {}: ", missing.display())),
         "{}",
         output.stderr
     );
