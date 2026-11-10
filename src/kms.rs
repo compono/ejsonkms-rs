@@ -11,6 +11,9 @@ use zeroize::Zeroizing;
 
 use crate::{EjsonKmsError, KmsError};
 
+/// The KMS encryption context key that carries a file's public key.
+pub(crate) const PUBLIC_KEY_CONTEXT: &str = "ejsonkms_public_key";
+
 /// Build a KMS client for the given region.
 ///
 /// If `aws_region` is `None` (or empty), the default region provider chain
@@ -37,8 +40,12 @@ async fn new_kms_client(aws_region: Option<&str>) -> aws_sdk_kms::Client {
 ///
 /// The returned key is wrapped in [`Zeroizing`] so it is wiped from memory
 /// when dropped.
+///
+/// `bound_public_key` is the public key the ciphertext was bound to when it
+/// was encrypted, if any; KMS refuses to decrypt when it differs.
 pub(crate) async fn decrypt_private_key_with_kms(
     private_key_enc: &str,
+    bound_public_key: Option<&str>,
     aws_region: Option<&str>,
 ) -> Result<Zeroizing<String>, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
@@ -47,9 +54,13 @@ pub(crate) async fn decrypt_private_key_with_kms(
         .decode(private_key_enc)
         .map_err(EjsonKmsError::base64)?;
 
-    let resp = kms_svc
+    let mut request = kms_svc
         .decrypt()
-        .ciphertext_blob(Blob::new(encrypted_value))
+        .ciphertext_blob(Blob::new(encrypted_value));
+    if let Some(public_key) = bound_public_key {
+        request = request.encryption_context(PUBLIC_KEY_CONTEXT, public_key);
+    }
+    let resp = request
         .send()
         .await
         .map_err(|e| KmsError::Decrypt(DisplayErrorContext(&e).to_string()))?;
@@ -63,17 +74,26 @@ pub(crate) async fn decrypt_private_key_with_kms(
 }
 
 /// Encrypt a private key with KMS and return it base64-encoded.
+///
+/// With `bound_public_key`, the ciphertext is bound to that public key
+/// through the KMS encryption context and can only be decrypted by a request
+/// that presents the same one.
 pub(crate) async fn encrypt_private_key_with_kms(
     private_key: &str,
     kms_key_id: &str,
+    bound_public_key: Option<&str>,
     aws_region: Option<&str>,
 ) -> Result<String, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
 
-    let resp = kms_svc
+    let mut request = kms_svc
         .encrypt()
         .key_id(kms_key_id)
-        .plaintext(Blob::new(private_key.as_bytes()))
+        .plaintext(Blob::new(private_key.as_bytes()));
+    if let Some(public_key) = bound_public_key {
+        request = request.encryption_context(PUBLIC_KEY_CONTEXT, public_key);
+    }
+    let resp = request
         .send()
         .await
         .map_err(|e| KmsError::Encrypt(DisplayErrorContext(&e).to_string()))?;

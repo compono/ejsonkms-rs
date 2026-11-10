@@ -65,6 +65,31 @@ offline backup); treat that output as a secret.
 `--scheme v2` (or `--pqc`) for a hybrid X25519 + ML-KEM-768 keypair that also resists a future quantum
 computer; the Go tools cannot read such files.
 
+### Binding the key to the file
+
+By default the KMS-encrypted private key can be decrypted by anyone allowed to use the KMS key, whichever file
+it sits in. `keygen --bind-public-key` encrypts it with the KMS
+[encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/encrypt_context.html)
+`ejsonkms_public_key = <the file's _public_key>` and records that in the file:
+
+```
+$ ejsonkms keygen --kms-key-id bc436485-5092-42b8-92a3-0aa8b93536dc --bind-public-key -o secrets.ejson
+$ cat secrets.ejson
+{
+  "_public_key": "6b8280f8...",
+  "_private_key_enc": "AQICAHh...",
+  "_kms_encryption_context": "public_key"
+}
+```
+
+KMS then refuses to decrypt the private key for a file with a different `_public_key`, the context shows up in
+CloudTrail, and an IAM or key policy can limit a role to particular files with the
+`kms:EncryptionContext:ejsonkms_public_key` condition key. Don't remove or edit `_kms_encryption_context`:
+decryption fails without it.
+
+This is opt-in because older versions of ejsonkms (before 3.0) and the Go tool do not send the context and so
+cannot decrypt such a file.
+
 > [!NOTE]
 > If the `AWS_REGION` environment variable is set, it will be used implicitly for `--aws-region` when the
 > flag is not provided. `AWS_DEFAULT_REGION` (and the usual AWS config chain) is used as a further fallback.
