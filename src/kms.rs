@@ -9,7 +9,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use zeroize::Zeroizing;
 
-use crate::{EjsonKmsError, KmsError};
+use crate::{EjsonKmsError, KmsError, SourceError};
 
 /// The KMS encryption context key that carries a file's public key.
 pub(crate) const PUBLIC_KEY_CONTEXT: &str = "ejsonkms_public_key";
@@ -63,7 +63,7 @@ pub(crate) async fn decrypt_private_key_with_kms(
     let resp = request
         .send()
         .await
-        .map_err(|e| KmsError::Decrypt(DisplayErrorContext(&e).to_string()))?;
+        .map_err(|e| KmsError::Decrypt(sdk_failure(e)))?;
 
     let plaintext = resp.plaintext().ok_or(KmsError::NoPlaintext)?;
 
@@ -94,9 +94,39 @@ pub(crate) async fn encrypt_private_key_with_kms(
     let resp = request
         .send()
         .await
-        .map_err(|e| KmsError::Encrypt(DisplayErrorContext(&e).to_string()))?;
+        .map_err(|e| KmsError::Encrypt(sdk_failure(e)))?;
 
     let ciphertext_blob = resp.ciphertext_blob().ok_or(KmsError::NoCiphertext)?;
 
     Ok(BASE64.encode(ciphertext_blob.as_ref()))
+}
+
+/// An AWS SDK error, displayed with its whole chain of causes.
+///
+/// The SDK's own `Display` says only "service error" or "dispatch failure";
+/// the useful part (the exception name and message, or the network error)
+/// is in the sources, which `DisplayErrorContext` writes out.
+#[derive(Debug)]
+struct SdkFailure<E> {
+    message: String,
+    source: E,
+}
+
+impl<E> std::fmt::Display for SdkFailure<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for SdkFailure<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn sdk_failure<E: std::error::Error + Send + Sync + 'static>(source: E) -> SourceError {
+    SourceError::new(SdkFailure {
+        message: DisplayErrorContext(&source).to_string(),
+        source,
+    })
 }

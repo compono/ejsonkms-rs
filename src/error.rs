@@ -78,14 +78,17 @@ pub enum EjsonKmsError {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum KmsError {
-    /// The KMS `Decrypt` call failed; the payload is the AWS SDK's message
-    /// (access denied, unknown key, no credentials, network failure, ...).
+    /// The KMS `Decrypt` call failed: access denied, unknown key, a wrong
+    /// encryption context, no credentials, a network failure, and so on.
+    /// The payload displays the AWS SDK's full message, and its
+    /// [source](std::error::Error::source) is the SDK's error.
     #[error("unable to decrypt parameter: {0}")]
-    Decrypt(String),
+    Decrypt(SourceError),
 
-    /// The KMS `Encrypt` call failed; the payload is the AWS SDK's message.
+    /// The KMS `Encrypt` call failed; the payload is as for
+    /// [`Decrypt`](Self::Decrypt).
     #[error("unable to encrypt parameter: {0}")]
-    Encrypt(String),
+    Encrypt(SourceError),
 
     /// KMS answered a `Decrypt` call without a plaintext.
     #[error("KMS decrypt returned no plaintext")]
@@ -119,7 +122,8 @@ impl EjsonKmsError {
     }
 }
 
-/// An error from one of the parsers or encoders ejsonkms uses.
+/// An error from one of the crates ejsonkms builds on: a parser, an encoder
+/// or the AWS SDK.
 ///
 /// The concrete type is hidden so that those crates are not part of the
 /// ejsonkms API; upgrading one of them is then not a breaking change here.
@@ -127,7 +131,7 @@ impl EjsonKmsError {
 pub struct SourceError(Box<dyn std::error::Error + Send + Sync + 'static>);
 
 impl SourceError {
-    fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub(crate) fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self(Box::new(err))
     }
 }

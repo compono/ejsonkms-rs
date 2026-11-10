@@ -204,8 +204,18 @@ async fn library_api(kms: &MockKms) {
         .await
         .expect_err("decrypt should fail when KMS refuses");
     assert!(
-        matches!(&err, EjsonKmsError::Kms(KmsError::Decrypt(message)) if message.contains("AccessDeniedException")),
+        matches!(&err, EjsonKmsError::Kms(KmsError::Decrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
         "{err:?}"
+    );
+
+    // The SDK's own error is still reachable for callers who want it.
+    let EjsonKmsError::Kms(KmsError::Decrypt(cause)) = &err else {
+        unreachable!()
+    };
+    assert!(std::error::Error::source(cause).is_some());
+    assert!(
+        err.to_string().starts_with("unable to decrypt parameter: "),
+        "{err}"
     );
 
     // KMS refuses to encrypt.
@@ -214,7 +224,7 @@ async fn library_api(kms: &MockKms) {
         .await
         .expect_err("keygen should fail when KMS refuses");
     assert!(
-        matches!(&err, EjsonKmsError::Kms(KmsError::Encrypt(message)) if message.contains("AccessDeniedException")),
+        matches!(&err, EjsonKmsError::Kms(KmsError::Encrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
         "{err:?}"
     );
 
