@@ -19,6 +19,17 @@ stdout or an unrecognized extension).
 
 ## Install
 
+### Fedora (COPR)
+
+ejsonkms is packaged in the [tle/power](https://copr.fedorainfracloud.org/coprs/tle/power/) COPR repository:
+
+```
+sudo dnf copr enable tle/power
+sudo dnf install ejsonkms
+```
+
+### From source
+
 ```
 cargo install --path .
 ```
