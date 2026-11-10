@@ -10,8 +10,8 @@
 mod common;
 
 use common::{AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
-use ejson::FileFormat;
-use ejsonkms::{EjsonKmsError, KmsError};
+use ejson::{FileFormat, Scheme};
+use ejsonkms::{EjsonKmsError, KeygenOptions, KmsError};
 use serde_json::json;
 
 #[test]
@@ -39,9 +39,10 @@ async fn library_api(kms: &MockKms) {
     let region = Some(AWS_REGION);
 
     // --- keygen ---
-    let keys = ejsonkms::keygen(KMS_KEY_ID, region)
+    let keys = ejsonkms::keygen(KMS_KEY_ID, region, &KeygenOptions::default())
         .await
         .expect("keygen should succeed");
+    assert_eq!(keys.scheme, Scheme::V1);
     assert_eq!(keys.public_key.len(), 64);
     assert_eq!(keys.private_key.len(), 64);
     assert_ne!(keys.public_key, *keys.private_key);
@@ -107,6 +108,32 @@ async fn library_api(kms: &MockKms) {
         "export my_secret='secret123'\n"
     );
 
+    // --- a v2 (post-quantum hybrid) keypair works the same way ---
+    let v2_keys = ejsonkms::keygen(
+        KMS_KEY_ID,
+        region,
+        &KeygenOptions::default().scheme(Scheme::V2),
+    )
+    .await
+    .expect("v2 keygen should succeed");
+    assert_eq!(v2_keys.scheme, Scheme::V2);
+    assert_ne!(v2_keys.public_key.len(), 64);
+
+    let v2_secrets = dir.path().join("v2.ejson");
+    let mut document: serde_json::Value =
+        serde_json::from_str(&v2_keys.to_document(FileFormat::Json).unwrap()).unwrap();
+    document["environment"] = json!({ "my_secret": "secret123" });
+    std::fs::write(&v2_secrets, document.to_string()).unwrap();
+    ejson::encrypt_file_in_place(&v2_secrets).unwrap();
+    let encrypted = std::fs::read_to_string(&v2_secrets).unwrap();
+    assert!(encrypted.contains("EJ[2:"), "{encrypted}");
+
+    let decrypted = ejsonkms::decrypt(&v2_secrets, region)
+        .await
+        .expect("v2 decrypt should succeed");
+    let decrypted: serde_json::Value = serde_json::from_slice(&decrypted).unwrap();
+    assert_eq!(decrypted["environment"]["my_secret"], "secret123");
+
     // --- errors are structured ---
 
     // No `_private_key_enc`: fails before touching KMS.
@@ -142,7 +169,7 @@ async fn library_api(kms: &MockKms) {
     );
 
     // KMS refuses to encrypt.
-    let err = ejsonkms::keygen(DENIED_KEY_ID, region)
+    let err = ejsonkms::keygen(DENIED_KEY_ID, region, &KeygenOptions::default())
         .await
         .expect_err("keygen should fail when KMS refuses");
     assert!(

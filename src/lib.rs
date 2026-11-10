@@ -8,7 +8,8 @@
 //! ```no_run
 //! # async fn example() -> Result<(), ejsonkms::EjsonKmsError> {
 //! // Create a keypair whose private key is wrapped by a KMS key ...
-//! let keys = ejsonkms::keygen("alias/my-key", Some("us-east-1")).await?;
+//! let options = ejsonkms::KeygenOptions::default();
+//! let keys = ejsonkms::keygen("alias/my-key", Some("us-east-1"), &options).await?;
 //! std::fs::write("secrets.ejson", keys.to_document(ejson::FileFormat::Json)?)?;
 //!
 //! // ... and later decrypt the file; `None` uses the default AWS region chain.
@@ -169,6 +170,8 @@ pub struct EjsonKmsKeys {
     /// The unencrypted private key. Nothing needs it once the file is
     /// written; keep it out of logs.
     pub private_key: Zeroizing<String>,
+    /// The scheme the keypair is for.
+    pub scheme: Scheme,
 }
 
 impl std::fmt::Debug for EjsonKmsKeys {
@@ -177,6 +180,7 @@ impl std::fmt::Debug for EjsonKmsKeys {
             .field("public_key", &self.public_key)
             .field("private_key_enc", &self.private_key_enc)
             .field("private_key", &"[REDACTED]")
+            .field("scheme", &self.scheme)
             .finish()
     }
 }
@@ -209,18 +213,48 @@ impl EjsonKmsKeys {
     }
 }
 
+/// How [`keygen`] should generate a keypair.
+///
+/// The default is a `v1` keypair, which every version of ejson and ejsonkms
+/// (including the Go tools) can use.
+///
+/// ```
+/// use ejsonkms::KeygenOptions;
+///
+/// let options = KeygenOptions::default().scheme(ejson::Scheme::V2);
+/// ```
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct KeygenOptions {
+    /// The key scheme: [`Scheme::V1`] (NaCl box, the default) or
+    /// [`Scheme::V2`] (hybrid X25519 + ML-KEM-768, post-quantum). The Go
+    /// tools cannot read `v2` files.
+    pub scheme: Scheme,
+}
+
+impl KeygenOptions {
+    /// Set the key scheme.
+    #[must_use]
+    pub fn scheme(mut self, scheme: Scheme) -> Self {
+        self.scheme = scheme;
+        self
+    }
+}
+
 /// Generate keys and prepare an EJSON file with them.
 ///
 /// The generated private key is encrypted with the given KMS key.
 pub async fn keygen(
     kms_key_id: &str,
     aws_region: Option<&str>,
+    options: &KeygenOptions,
 ) -> Result<EjsonKmsKeys, EjsonKmsError> {
+    let scheme = options.scheme;
     let GeneratedKeypair {
         public_key,
         private_key,
         ..
-    } = ejson::generate_keypair(Scheme::V1);
+    } = ejson::generate_keypair(scheme);
 
     let private_key_enc =
         encrypt_private_key_with_kms(&private_key, kms_key_id, aws_region).await?;
@@ -229,6 +263,7 @@ pub async fn keygen(
         public_key,
         private_key_enc,
         private_key,
+        scheme,
     })
 }
 

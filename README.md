@@ -61,6 +61,10 @@ The private key is not printed: the file already holds it, encrypted with KMS, a
 `ejsonkms` needs. Pass `--show-private-key` to also print it as `Private Key: ...` (for example to keep an
 offline backup); treat that output as a secret.
 
+`keygen` generates a `v1` keypair, which every ejson and ejsonkms (including the Go tools) can read. Pass
+`--scheme v2` (or `--pqc`) for a hybrid X25519 + ML-KEM-768 keypair that also resists a future quantum
+computer; the Go tools cannot read such files.
+
 > [!NOTE]
 > If the `AWS_REGION` environment variable is set, it will be used implicitly for `--aws-region` when the
 > flag is not provided. `AWS_DEFAULT_REGION` (and the usual AWS config chain) is used as a further fallback.

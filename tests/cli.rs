@@ -281,6 +281,48 @@ fn keygen_o_writes_the_format_of_the_extension_and_prints_nothing() {
 }
 
 #[test]
+fn keygen_v2_files_encrypt_and_decrypt() {
+    let fixture = Fixture::new();
+
+    for (name, flags) in [
+        ("pqc.ejson", &["--pqc"][..]),
+        ("v2.ejson", &["--scheme", "v2"]),
+    ] {
+        let path = fixture.path(name);
+        let path = path.to_str().unwrap();
+        let mut args = vec!["keygen", "--kms-key-id", KMS_KEY_ID, "-o", path];
+        args.extend_from_slice(flags);
+        fixture.kms.run_ok(&args);
+
+        let mut document: serde_json::Value = serde_json::from_str(&read(path)).unwrap();
+        assert_ne!(
+            document["_public_key"].as_str().unwrap().len(),
+            64,
+            "{name}: expected a v2 public key"
+        );
+        document["environment"] = json!({ "my_secret": "secret123" });
+        std::fs::write(path, document.to_string()).unwrap();
+
+        fixture.kms.run_ok(&["encrypt", path]);
+        let encrypted = read(path);
+        assert!(encrypted.contains("EJ[2:"), "{name}: {encrypted}");
+        assert!(!encrypted.contains("secret123"), "{name}");
+
+        assert_eq!(
+            fixture.kms.run_ok(&["env", path]),
+            "export my_secret='secret123'\n",
+            "{name}"
+        );
+    }
+
+    let output = fixture
+        .kms
+        .run(&["keygen", "--kms-key-id", KMS_KEY_ID, "--scheme", "v9"]);
+    assert_eq!(output.code, Some(2));
+    assert_eq!(output.stdout, "");
+}
+
+#[test]
 fn keygen_o_refuses_to_overwrite_an_existing_file() {
     let fixture = Fixture::new();
     let secrets = fixture.secrets();
