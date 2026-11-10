@@ -56,8 +56,9 @@ pub(crate) async fn decrypt_private_key_with_kms(
 
     let plaintext = resp.plaintext().ok_or(KmsError::NoPlaintext)?;
 
-    String::from_utf8(plaintext.as_ref().to_vec())
-        .map(Zeroizing::new)
+    // Validate in place: the only copy made is the one that gets wiped.
+    std::str::from_utf8(plaintext.as_ref())
+        .map(|key| Zeroizing::new(key.to_owned()))
         .map_err(|_| KmsError::KeyNotUtf8.into())
 }
 
