@@ -146,6 +146,11 @@ $ ejsonkms completions zsh > ~/.zfunc/_ejsonkms     # also: bash, fish, powershe
 $ ejsonkms man > ejsonkms.1
 ```
 
+## Upgrading
+
+Files and keys are unchanged in 3.0, but the Rust library API and a few details of the command-line tool
+differ. See [UPGRADING.md](UPGRADING.md).
+
 ## Using as a library
 
 The crate is also a library. Turn off the default `cli` feature so the command-line tool's dependencies are
