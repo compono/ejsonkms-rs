@@ -170,9 +170,13 @@ pub async fn keygen_action(
         .and_then(|path| detect_format(path).ok())
         .unwrap_or(FileFormat::Json);
     let ejson_file = match format {
-        FileFormat::Json => serde_json::to_string_pretty(&ejson_kms_file)?,
-        FileFormat::Yaml => serde_norway::to_string(&ejson_kms_file)?,
-        FileFormat::Toml => toml::to_string(&ejson_kms_file)?,
+        FileFormat::Json => {
+            serde_json::to_string_pretty(&ejson_kms_file).map_err(EjsonKmsError::json)?
+        }
+        FileFormat::Yaml => {
+            serde_norway::to_string(&ejson_kms_file).map_err(EjsonKmsError::yaml)?
+        }
+        FileFormat::Toml => toml::to_string(&ejson_kms_file).map_err(EjsonKmsError::toml)?,
         // `FileFormat` may gain formats in a minor release of ejson.
         other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };

@@ -46,7 +46,9 @@ pub(crate) async fn decrypt_private_key_with_kms(
 ) -> Result<Zeroizing<String>, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
 
-    let encrypted_value = BASE64.decode(private_key_enc)?;
+    let encrypted_value = BASE64
+        .decode(private_key_enc)
+        .map_err(EjsonKmsError::base64)?;
 
     let resp = kms_svc
         .decrypt()
