@@ -1,0 +1,113 @@
+//! The command-line interface: what each command accepts.
+
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand};
+use ejson::Scheme;
+use ejsonkms::KeygenOptions;
+
+#[derive(Parser)]
+#[command(
+    name = "ejsonkms",
+    version,
+    about = "manage encrypted secrets using EJSON & AWS KMS"
+)]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub(crate) command: Command,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum Command {
+    /// (re-)encrypt one or more EJSON files
+    Encrypt(EncryptArgs),
+    /// decrypt an EJSON file
+    Decrypt(DecryptArgs),
+    /// generate a new EJSON keypair
+    Keygen(KeygenArgs),
+    /// print shell export statements
+    Env(EnvArgs),
+}
+
+/// Where to find KMS; shared by every command that calls it.
+#[derive(Args)]
+pub(crate) struct AwsArgs {
+    /// AWS Region
+    #[arg(long = "aws-region", env = "AWS_REGION")]
+    aws_region: Option<String>,
+}
+
+impl AwsArgs {
+    /// The region to use, or `None` for the default AWS region chain.
+    pub(crate) fn region(&self) -> Option<&str> {
+        self.aws_region.as_deref()
+    }
+}
+
+#[derive(Args)]
+pub(crate) struct EncryptArgs {
+    /// EJSON file(s) to encrypt
+    #[arg(value_name = "FILE", required = true)]
+    pub(crate) files: Vec<PathBuf>,
+}
+
+#[derive(Args)]
+pub(crate) struct DecryptArgs {
+    /// print output to the provided file, rather than stdout
+    #[arg(short = 'o', value_name = "FILE")]
+    pub(crate) out: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) aws: AwsArgs,
+    /// EJSON file to decrypt
+    #[arg(value_name = "FILE")]
+    pub(crate) file: PathBuf,
+}
+
+#[derive(Args)]
+pub(crate) struct KeygenArgs {
+    /// KMS Key ID to encrypt the private key with
+    #[arg(long = "kms-key-id")]
+    pub(crate) kms_key_id: String,
+    #[command(flatten)]
+    pub(crate) aws: AwsArgs,
+    /// write EJSON file to a file rather than stdout
+    #[arg(short = 'o', value_name = "FILE")]
+    pub(crate) out: Option<PathBuf>,
+    /// also print the unencrypted private key (it is not needed to use
+    /// the file: KMS decrypts the copy stored in it)
+    #[arg(long = "show-private-key")]
+    pub(crate) show_private_key: bool,
+    /// Key scheme to generate: v1 (NaCl box, readable by every ejson
+    /// and ejsonkms) or v2 (hybrid post-quantum)
+    #[arg(long = "scheme", default_value = "v1")]
+    scheme: Scheme,
+    /// Generate a v2 hybrid X25519 + ML-KEM-768 keypair (alias for --scheme v2)
+    #[arg(long = "pqc")]
+    pqc: bool,
+    /// bind the encrypted private key to the public key with a KMS
+    /// encryption context (not readable by ejsonkms before 3.0 or the
+    /// Go tool)
+    #[arg(long = "bind-public-key")]
+    bind_public_key: bool,
+}
+
+impl KeygenArgs {
+    /// The kind of keypair the flags ask for.
+    pub(crate) fn options(&self) -> KeygenOptions {
+        KeygenOptions::default()
+            .scheme(if self.pqc { Scheme::V2 } else { self.scheme })
+            .bind_public_key(self.bind_public_key)
+    }
+}
+
+#[derive(Args)]
+pub(crate) struct EnvArgs {
+    /// Suppress export statement
+    #[arg(short, long)]
+    pub(crate) quiet: bool,
+    #[command(flatten)]
+    pub(crate) aws: AwsArgs,
+    /// EJSON file to read secrets from
+    #[arg(value_name = "FILE")]
+    pub(crate) file: PathBuf,
+}

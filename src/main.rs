@@ -1,87 +1,16 @@
+//! The `ejsonkms` command-line tool.
+
 // The CLI reports errors on stderr.
 #![allow(clippy::print_stderr)]
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-use ejson::Scheme;
-use ejsonkms::KeygenOptions;
+use clap::Parser;
+
+use crate::cli::{Cli, Command};
 
 mod actions;
-
-#[derive(Parser)]
-#[command(
-    name = "ejsonkms",
-    version,
-    about = "manage encrypted secrets using EJSON & AWS KMS"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// (re-)encrypt one or more EJSON files
-    Encrypt {
-        /// EJSON file(s) to encrypt
-        #[arg(value_name = "FILE", required = true)]
-        files: Vec<PathBuf>,
-    },
-    /// decrypt an EJSON file
-    Decrypt {
-        /// print output to the provided file, rather than stdout
-        #[arg(short = 'o', value_name = "FILE")]
-        out: Option<PathBuf>,
-        /// AWS Region
-        #[arg(long = "aws-region", env = "AWS_REGION")]
-        aws_region: Option<String>,
-        /// EJSON file to decrypt
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-    },
-    /// generate a new EJSON keypair
-    Keygen {
-        /// KMS Key ID to encrypt the private key with
-        #[arg(long = "kms-key-id")]
-        kms_key_id: String,
-        /// AWS Region
-        #[arg(long = "aws-region", env = "AWS_REGION")]
-        aws_region: Option<String>,
-        /// write EJSON file to a file rather than stdout
-        #[arg(short = 'o', value_name = "FILE")]
-        out: Option<PathBuf>,
-        /// also print the unencrypted private key (it is not needed to use
-        /// the file: KMS decrypts the copy stored in it)
-        #[arg(long = "show-private-key")]
-        show_private_key: bool,
-        /// Key scheme to generate: v1 (NaCl box, readable by every ejson
-        /// and ejsonkms) or v2 (hybrid post-quantum)
-        #[arg(long = "scheme", default_value = "v1")]
-        scheme: Scheme,
-        /// Generate a v2 hybrid X25519 + ML-KEM-768 keypair (alias for --scheme v2)
-        #[arg(long = "pqc")]
-        pqc: bool,
-        /// bind the encrypted private key to the public key with a KMS
-        /// encryption context (not readable by ejsonkms before 3.0 or the
-        /// Go tool)
-        #[arg(long = "bind-public-key")]
-        bind_public_key: bool,
-    },
-    /// print shell export statements
-    Env {
-        /// Suppress export statement
-        #[arg(short, long)]
-        quiet: bool,
-        /// AWS Region
-        #[arg(long = "aws-region", env = "AWS_REGION")]
-        aws_region: Option<String>,
-        /// EJSON file to read secrets from
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
-    },
-}
+mod cli;
 
 /// Prints warnings from the ejson library to stderr as `ejsonkms: warning: ...`.
 ///
@@ -121,52 +50,13 @@ fn main() -> ExitCode {
     disable_core_dumps();
 
     // What to print before the error if the command fails.
-    let (failure, result) = match cli.command {
-        Command::Encrypt { files } => ("Encryption failed", actions::encrypt_action(&files)),
-        Command::Decrypt {
-            out,
-            aws_region,
-            file,
-        } => (
-            "Decryption failed",
-            block_on(actions::decrypt_action(
-                &file,
-                aws_region.as_deref(),
-                out.as_deref(),
-            )),
-        ),
-        Command::Keygen {
-            kms_key_id,
-            aws_region,
-            out,
-            show_private_key,
-            scheme,
-            pqc,
-            bind_public_key,
-        } => (
-            "Key generation failed",
-            block_on(actions::keygen_action(
-                &kms_key_id,
-                aws_region.as_deref(),
-                out.as_deref(),
-                show_private_key,
-                &KeygenOptions::default()
-                    .scheme(if pqc { Scheme::V2 } else { scheme })
-                    .bind_public_key(bind_public_key),
-            )),
-        ),
-        Command::Env {
-            quiet,
-            aws_region,
-            file,
-        } => (
+    let (failure, result) = match &cli.command {
+        Command::Encrypt(args) => ("Encryption failed", actions::encrypt(args)),
+        Command::Decrypt(args) => ("Decryption failed", block_on(actions::decrypt(args))),
+        Command::Keygen(args) => ("Key generation failed", block_on(actions::keygen(args))),
+        Command::Env(args) => (
             "error",
-            block_on(actions::env_action(
-                &file,
-                aws_region.as_deref(),
-                quiet,
-                &mut std::io::stdout(),
-            )),
+            block_on(actions::env(args, &mut std::io::stdout())),
         ),
     };
 

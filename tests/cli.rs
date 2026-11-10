@@ -172,6 +172,31 @@ fn decrypt_o_replaces_an_existing_file_without_reusing_its_permissions() {
 }
 
 #[test]
+fn decrypt_o_accepts_a_bare_file_name() {
+    let fixture = Fixture::new();
+    let secrets = fixture.secrets();
+
+    // No directory component: the temporary file goes in the current directory.
+    let output = fixture
+        .kms
+        .command()
+        .current_dir(fixture.dir.path())
+        .args(["decrypt", "-o", "plain.json", &secrets])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let out = fixture.path("plain.json");
+    assert!(read(&out).contains("secret123"));
+    #[cfg(unix)]
+    assert_eq!(mode(&out), 0o600);
+}
+
+#[test]
 fn env_prints_assignments() {
     let fixture = Fixture::new();
     let secrets = fixture.secrets();
