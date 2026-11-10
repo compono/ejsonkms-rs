@@ -7,8 +7,6 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use zeroize::Zeroizing;
-
 use ejson::env::{ExportStyle, Shell};
 use ejson::FileFormat;
 
@@ -111,8 +109,7 @@ pub(crate) async fn decrypt_action(
     aws_region: &str,
     out_file: Option<&str>,
 ) -> Result<(), CliError> {
-    // Wipe the plaintext from memory once it has been written out.
-    let decrypted = Zeroizing::new(ejsonkms::decrypt(ejson_file_path, aws_region).await?);
+    let decrypted = ejsonkms::decrypt(ejson_file_path, aws_region).await?;
 
     match out_file {
         Some(path) => write_private_file_atomically(Path::new(path), &decrypted)?,

@@ -12,7 +12,7 @@ use ejson::env::SecretEnvMap;
 use ejson::{FileFormat, KeySource, Scheme, UnderscorePrefix};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub(crate) use kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms};
 
@@ -183,7 +183,13 @@ pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, 
 /// - `.ejson` or `.json` -> JSON format
 /// - `.etoml` or `.toml` -> TOML format
 /// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
-pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>, EjsonKmsError> {
+///
+/// The decrypted document is wrapped in [`Zeroizing`], so it is wiped from
+/// memory when dropped.
+pub async fn decrypt(
+    ejson_file_path: &str,
+    aws_region: &str,
+) -> Result<Zeroizing<Vec<u8>>, EjsonKmsError> {
     let format = detect_format(ejson_file_path)?;
     let data = read_file_checked(ejson_file_path)?;
 
@@ -192,10 +198,10 @@ pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>,
     let kms_decrypted_private_key =
         decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
 
-    let mut output = Vec::new();
+    let mut output = Zeroizing::new(Vec::new());
     ejson::decrypt(
         &data[..],
-        &mut output,
+        &mut *output,
         KeySource::PrivateKey(&kms_decrypted_private_key),
         format,
     )?;

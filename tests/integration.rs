@@ -159,7 +159,7 @@ async fn full_roundtrip_with_mock_kms() {
     let decrypted = ejsonkms::decrypt(&ejson_path_str, aws_region)
         .await
         .expect("decrypt should succeed");
-    let decrypted = String::from_utf8(decrypted).unwrap();
+    let decrypted = String::from_utf8(decrypted.to_vec()).unwrap();
     assert!(decrypted.contains(r#""my_secret": "secret123""#));
 
     assert_eq!(
@@ -283,7 +283,9 @@ async fn full_roundtrip_with_mock_kms() {
     let decrypted = ejsonkms::decrypt(&yaml_path_str, aws_region)
         .await
         .expect("yaml decrypt should succeed");
-    assert!(String::from_utf8(decrypted).unwrap().contains("secret123"));
+    assert!(String::from_utf8(decrypted.to_vec())
+        .unwrap()
+        .contains("secret123"));
 
     assert_eq!(
         cli_ok(&["env", "--aws-region", aws_region, &yaml_path_str]),
@@ -307,7 +309,9 @@ async fn full_roundtrip_with_mock_kms() {
     let decrypted = ejsonkms::decrypt(&toml_path_str, aws_region)
         .await
         .expect("toml decrypt should succeed");
-    assert!(String::from_utf8(decrypted).unwrap().contains("secret123"));
+    assert!(String::from_utf8(decrypted.to_vec())
+        .unwrap()
+        .contains("secret123"));
 
     assert_eq!(
         cli_ok(&["env", "--aws-region", aws_region, &toml_path_str]),
