@@ -9,10 +9,10 @@
 mod kms;
 
 use ejson::env::SecretEnvMap;
-use ejson::{FileFormat, KeySource, Scheme, UnderscorePrefix};
+use ejson::{FileFormat, GeneratedKeypair, KeySource, Scheme, UnderscorePrefix};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::Zeroizing;
 
 pub(crate) use kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms};
 
@@ -111,13 +111,18 @@ impl std::error::Error for SourceError {
 
 /// Keys used in an EjsonKms file.
 ///
-/// Security: all fields are zeroized from memory when the struct is dropped,
-/// and the `Debug` implementation redacts the private key.
-#[derive(Zeroize, ZeroizeOnDrop)]
+/// Security: the private key is zeroized from memory when the struct is
+/// dropped, and the `Debug` implementation redacts it.
+#[non_exhaustive]
 pub struct EjsonKmsKeys {
+    /// The public key, stored in the file as `_public_key`.
     pub public_key: String,
+    /// The private key encrypted with KMS and base64-encoded, stored in the
+    /// file as `_private_key_enc`.
     pub private_key_enc: String,
-    pub private_key: String,
+    /// The unencrypted private key. Nothing needs it once the file is
+    /// written; keep it out of logs.
+    pub private_key: Zeroizing<String>,
 }
 
 impl std::fmt::Debug for EjsonKmsKeys {
@@ -162,17 +167,19 @@ impl EjsonKmsKeys {
 ///
 /// The generated private key is encrypted with the given KMS key.
 pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, EjsonKmsError> {
-    // `keypair.private_key` wipes itself on drop; the copy handed to
-    // `EjsonKmsKeys` is wiped when that struct is dropped.
-    let keypair = ejson::generate_keypair(Scheme::V1);
+    let GeneratedKeypair {
+        public_key,
+        private_key,
+        ..
+    } = ejson::generate_keypair(Scheme::V1);
 
     let private_key_enc =
-        encrypt_private_key_with_kms(&keypair.private_key, kms_key_id, aws_region).await?;
+        encrypt_private_key_with_kms(&private_key, kms_key_id, aws_region).await?;
 
     Ok(EjsonKmsKeys {
-        public_key: keypair.public_key.clone(),
+        public_key,
         private_key_enc,
-        private_key: keypair.private_key.to_string(),
+        private_key,
     })
 }
 

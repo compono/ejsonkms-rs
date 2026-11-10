@@ -126,7 +126,7 @@ async fn full_roundtrip_with_mock_kms() {
         .expect("keygen should succeed");
     assert_eq!(keys.public_key.len(), 64);
     assert_eq!(keys.private_key.len(), 64);
-    assert_ne!(keys.public_key, keys.private_key);
+    assert_ne!(keys.public_key, *keys.private_key);
     // The mock KMS is an identity transform, so the encrypted private key
     // decodes back to the plaintext private key
     assert_eq!(

@@ -172,7 +172,7 @@ pub(crate) async fn keygen_action(
     }
 
     if show_private_key {
-        println!("Private Key: {}", ejson_kms_keys.private_key);
+        println!("Private Key: {}", *ejson_kms_keys.private_key);
     }
     if out_file.is_none() {
         if show_private_key {
