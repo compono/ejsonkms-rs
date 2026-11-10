@@ -13,14 +13,16 @@ use crate::{EjsonKmsError, KmsError};
 
 /// Build a KMS client for the given region.
 ///
-/// If `aws_region` is empty, the default region provider chain is used
-/// (`AWS_REGION`, `AWS_DEFAULT_REGION`, profile, etc.).
+/// If `aws_region` is `None` (or empty), the default region provider chain
+/// is used (`AWS_REGION`, `AWS_DEFAULT_REGION`, profile, etc.).
 ///
 /// If the `FAKE_AWSKMS_URL` environment variable is set, the client is pointed
 /// at that endpoint instead (used for testing against a local KMS).
-async fn new_kms_client(aws_region: &str) -> aws_sdk_kms::Client {
+async fn new_kms_client(aws_region: Option<&str>) -> aws_sdk_kms::Client {
     let region_provider = RegionProviderChain::first_try(
-        (!aws_region.is_empty()).then(|| Region::new(aws_region.to_string())),
+        aws_region
+            .filter(|region| !region.is_empty())
+            .map(|region| Region::new(region.to_string())),
     )
     .or_default_provider();
 
@@ -42,7 +44,7 @@ async fn new_kms_client(aws_region: &str) -> aws_sdk_kms::Client {
 /// when dropped.
 pub(crate) async fn decrypt_private_key_with_kms(
     private_key_enc: &str,
-    aws_region: &str,
+    aws_region: Option<&str>,
 ) -> Result<Zeroizing<String>, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
 
@@ -68,7 +70,7 @@ pub(crate) async fn decrypt_private_key_with_kms(
 pub(crate) async fn encrypt_private_key_with_kms(
     private_key: &str,
     kms_key_id: &str,
-    aws_region: &str,
+    aws_region: Option<&str>,
 ) -> Result<String, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
 

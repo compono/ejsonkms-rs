@@ -95,24 +95,24 @@ fn create_temp_file(dir: &Path, name: &str) -> std::io::Result<(PathBuf, File)> 
 }
 
 /// (Re-)encrypt one or more EJSON files in place.
-pub(crate) fn encrypt_action(file_paths: &[String]) -> Result<(), CliError> {
+pub(crate) fn encrypt_action(file_paths: &[PathBuf]) -> Result<(), CliError> {
     for file_path in file_paths {
         let n = ejson::encrypt_file_in_place(file_path).map_err(EjsonKmsError::from)?;
-        println!("Wrote {n} bytes to {file_path}.");
+        println!("Wrote {n} bytes to {}.", file_path.display());
     }
     Ok(())
 }
 
 /// Decrypt an EJSON file, writing the output to `out_file` (or stdout if `None`).
 pub(crate) async fn decrypt_action(
-    ejson_file_path: &str,
-    aws_region: &str,
-    out_file: Option<&str>,
+    ejson_file_path: &Path,
+    aws_region: Option<&str>,
+    out_file: Option<&Path>,
 ) -> Result<(), CliError> {
     let decrypted = ejsonkms::decrypt(ejson_file_path, aws_region).await?;
 
     match out_file {
-        Some(path) => write_private_file_atomically(Path::new(path), &decrypted)?,
+        Some(path) => write_private_file_atomically(path, &decrypted)?,
         None => std::io::stdout()
             .write_all(&decrypted)
             .map_err(EjsonKmsError::from)?,
@@ -137,14 +137,14 @@ pub(crate) async fn decrypt_action(
 /// its encrypted values along with the only copy of their private key.
 pub(crate) async fn keygen_action(
     kms_key_id: &str,
-    aws_region: &str,
-    out_file: Option<&str>,
+    aws_region: Option<&str>,
+    out_file: Option<&Path>,
     show_private_key: bool,
 ) -> Result<(), CliError> {
     // Fail before asking KMS for anything; `create_new` below still guards
     // against the file appearing in the meantime.
     if let Some(path) = out_file {
-        if Path::new(path).exists() {
+        if path.exists() {
             return Err(EjsonKmsError::from(already_exists(path)).into());
         }
     }
@@ -183,18 +183,21 @@ pub(crate) async fn keygen_action(
     Ok(())
 }
 
-fn already_exists(path: &str) -> std::io::Error {
+fn already_exists(path: &Path) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        format!("{path} already exists; refusing to overwrite it"),
+        format!(
+            "{} already exists; refusing to overwrite it",
+            path.display()
+        ),
     )
 }
 
 /// Decrypt an EJSON file and write shell export statements for the values
 /// under its `environment` key.
 pub(crate) async fn env_action<W: Write>(
-    ejson_file_path: &str,
-    aws_region: &str,
+    ejson_file_path: &Path,
+    aws_region: Option<&str>,
     quiet: bool,
     output: &mut W,
 ) -> Result<(), CliError> {

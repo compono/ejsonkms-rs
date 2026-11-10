@@ -122,7 +122,7 @@ async fn full_roundtrip_with_mock_kms() {
     let aws_region = "us-east-1";
 
     // --- keygen ---
-    let keys = ejsonkms::keygen(kms_key_id, aws_region)
+    let keys = ejsonkms::keygen(kms_key_id, Some(aws_region))
         .await
         .expect("keygen should succeed");
     assert_eq!(keys.public_key.len(), 64);
@@ -157,7 +157,7 @@ async fn full_roundtrip_with_mock_kms() {
     assert!(!encrypted.contains("secret123"));
 
     // --- decrypt ---
-    let decrypted = ejsonkms::decrypt(&ejson_path_str, aws_region)
+    let decrypted = ejsonkms::decrypt(&ejson_path_str, Some(aws_region))
         .await
         .expect("decrypt should succeed");
     let decrypted = String::from_utf8(decrypted.to_vec()).unwrap();
@@ -275,7 +275,7 @@ async fn full_roundtrip_with_mock_kms() {
 
     // `_private_key_enc` that is not base64 never reaches KMS.
     let bad_base64 = write_file("bad_base64.ejson", "!!!", serde_json::json!({}));
-    let err = ejsonkms::decrypt(&bad_base64, aws_region)
+    let err = ejsonkms::decrypt(&bad_base64, Some(aws_region))
         .await
         .expect_err("decrypt should fail on invalid base64");
     assert!(matches!(err, EjsonKmsError::Base64(_)), "{err:?}");
@@ -286,7 +286,7 @@ async fn full_roundtrip_with_mock_kms() {
         &BASE64.encode([0xff, 0xfe]),
         serde_json::json!({}),
     );
-    let err = ejsonkms::decrypt(&not_utf8, aws_region)
+    let err = ejsonkms::decrypt(&not_utf8, Some(aws_region))
         .await
         .expect_err("decrypt should fail on a non-UTF-8 key");
     assert!(
@@ -301,7 +301,7 @@ async fn full_roundtrip_with_mock_kms() {
         &keys.private_key_enc,
         serde_json::json!({ "not valid": "x" }),
     );
-    let err = ejsonkms::decrypt_env(&bad_env, aws_region)
+    let err = ejsonkms::decrypt_env(&bad_env, Some(aws_region))
         .await
         .expect_err("decrypt_env should reject an invalid variable name");
     assert!(
@@ -320,7 +320,7 @@ async fn full_roundtrip_with_mock_kms() {
     );
 
     // --- decrypt a file with no _private_key_enc fails before touching KMS ---
-    let err = ejsonkms::decrypt("testdata/test_no_private_key.ejson", aws_region)
+    let err = ejsonkms::decrypt("testdata/test_no_private_key.ejson", Some(aws_region))
         .await
         .expect_err("decrypt should fail without _private_key_enc");
     assert!(err.to_string().contains("missing _private_key_enc"));
@@ -339,7 +339,7 @@ async fn full_roundtrip_with_mock_kms() {
     assert!(encrypted.contains("EJ["), "yaml secret should be encrypted");
     assert!(!encrypted.contains("secret123"));
 
-    let decrypted = ejsonkms::decrypt(&yaml_path_str, aws_region)
+    let decrypted = ejsonkms::decrypt(&yaml_path_str, Some(aws_region))
         .await
         .expect("yaml decrypt should succeed");
     assert!(String::from_utf8(decrypted.to_vec())
@@ -365,7 +365,7 @@ async fn full_roundtrip_with_mock_kms() {
     assert!(encrypted.contains("EJ["), "toml secret should be encrypted");
     assert!(!encrypted.contains("secret123"));
 
-    let decrypted = ejsonkms::decrypt(&toml_path_str, aws_region)
+    let decrypted = ejsonkms::decrypt(&toml_path_str, Some(aws_region))
         .await
         .expect("toml decrypt should succeed");
     assert!(String::from_utf8(decrypted.to_vec())

@@ -4,9 +4,24 @@
 //! The EJSON private key is encrypted with KMS and stored inside the EJSON file as
 //! `_private_key_enc`. Access to decrypt secrets can be controlled with IAM permissions
 //! on the KMS key.
+//!
+//! ```no_run
+//! # async fn example() -> Result<(), ejsonkms::EjsonKmsError> {
+//! // Create a keypair whose private key is wrapped by a KMS key ...
+//! let keys = ejsonkms::keygen("alias/my-key", Some("us-east-1")).await?;
+//! std::fs::write("secrets.ejson", keys.to_document(ejson::FileFormat::Json)?)?;
+//!
+//! // ... and later decrypt the file; `None` uses the default AWS region chain.
+//! let plaintext = ejsonkms::decrypt("secrets.ejson", None).await?;
+//! let environment = ejsonkms::decrypt_env("secrets.ejson", None).await?;
+//! # Ok(())
+//! # }
+//! ```
 #![forbid(unsafe_code)]
 
 mod kms;
+
+use std::path::Path;
 
 use ejson::env::SecretEnvMap;
 use ejson::{FileFormat, GeneratedKeypair, KeySource, Scheme, UnderscorePrefix};
@@ -196,7 +211,10 @@ impl EjsonKmsKeys {
 /// Generate keys and prepare an EJSON file with them.
 ///
 /// The generated private key is encrypted with the given KMS key.
-pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, EjsonKmsError> {
+pub async fn keygen(
+    kms_key_id: &str,
+    aws_region: Option<&str>,
+) -> Result<EjsonKmsKeys, EjsonKmsError> {
     let GeneratedKeypair {
         public_key,
         private_key,
@@ -224,9 +242,10 @@ pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, 
 /// The decrypted document is wrapped in [`Zeroizing`], so it is wiped from
 /// memory when dropped.
 pub async fn decrypt(
-    ejson_file_path: &str,
-    aws_region: &str,
+    ejson_file_path: impl AsRef<Path>,
+    aws_region: Option<&str>,
 ) -> Result<Zeroizing<Vec<u8>>, EjsonKmsError> {
+    let ejson_file_path = ejson_file_path.as_ref();
     let format = detect_format(ejson_file_path)?;
     let data = read_file_checked(ejson_file_path)?;
 
@@ -253,9 +272,10 @@ pub async fn decrypt(
 /// empty map rather than an error. Write the values as shell assignments
 /// with [`ejson::env::export`].
 pub async fn decrypt_env(
-    ejson_file_path: &str,
-    aws_region: &str,
+    ejson_file_path: impl AsRef<Path>,
+    aws_region: Option<&str>,
 ) -> Result<SecretEnvMap, EjsonKmsError> {
+    let ejson_file_path = ejson_file_path.as_ref();
     let format = detect_format(ejson_file_path)?;
     let data = read_file_checked(ejson_file_path)?;
 
@@ -279,7 +299,7 @@ pub async fn decrypt_env(
 }
 
 /// Detect the file format from the file extension.
-pub(crate) fn detect_format(file_path: &str) -> Result<FileFormat, EjsonKmsError> {
+pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsError> {
     FileFormat::from_path(file_path)
         .map_err(ejson::EjsonError::from)
         .map_err(EjsonKmsError::from)
@@ -287,7 +307,7 @@ pub(crate) fn detect_format(file_path: &str) -> Result<FileFormat, EjsonKmsError
 
 /// Read a file, rejecting anything larger than `ejson::MAX_FILE_SIZE` before
 /// loading it into memory.
-pub(crate) fn read_file_checked(file_path: &str) -> Result<Vec<u8>, EjsonKmsError> {
+pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsError> {
     let metadata = std::fs::metadata(file_path)?;
     if metadata.len() > ejson::MAX_FILE_SIZE {
         return Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge));
@@ -427,7 +447,7 @@ mod tests {
     fn test_ejson_errors_keep_their_message() {
         // ejson 2.0 errors carry no "format error:"-style prefixes, and
         // ejsonkms passes them through unchanged.
-        let err = detect_format("secrets.txt").unwrap_err();
+        let err = detect_format(Path::new("secrets.txt")).unwrap_err();
         assert!(matches!(
             err,
             EjsonKmsError::Ejson(ejson::EjsonError::FileFormat(_))
@@ -437,9 +457,18 @@ mod tests {
 
     #[test]
     fn test_detect_format() {
-        assert_eq!(detect_format("a.ejson").unwrap(), FileFormat::Json);
-        assert_eq!(detect_format("a.eyaml").unwrap(), FileFormat::Yaml);
-        assert_eq!(detect_format("a.etoml").unwrap(), FileFormat::Toml);
-        assert!(detect_format("a.txt").is_err());
+        assert_eq!(
+            detect_format(Path::new("a.ejson")).unwrap(),
+            FileFormat::Json
+        );
+        assert_eq!(
+            detect_format(Path::new("a.eyaml")).unwrap(),
+            FileFormat::Yaml
+        );
+        assert_eq!(
+            detect_format(Path::new("a.etoml")).unwrap(),
+            FileFormat::Toml
+        );
+        assert!(detect_format(Path::new("a.txt")).is_err());
     }
 }
