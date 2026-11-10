@@ -212,6 +212,76 @@ fn env_prints_assignments() {
 }
 
 #[test]
+fn env_shell_selects_the_syntax() {
+    let fixture = Fixture::new();
+    let secrets = fixture.secrets();
+
+    assert_eq!(
+        fixture.kms.run_ok(&["env", "--shell", "posix", &secrets]),
+        "export my_secret='secret123'\n"
+    );
+    assert_eq!(
+        fixture.kms.run_ok(&["env", "--shell", "fish", &secrets]),
+        "set -gx my_secret 'secret123'\n"
+    );
+
+    // `auto` follows $FISH_VERSION; the default stays POSIX either way.
+    let run_with_fish = |args: &[&str]| {
+        let output = fixture
+            .kms
+            .command()
+            .env("FISH_VERSION", "4.0")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(
+        run_with_fish(&["env", "--shell", "auto", &secrets]),
+        "set -gx my_secret 'secret123'\n"
+    );
+    assert_eq!(
+        run_with_fish(&["env", &secrets]),
+        "export my_secret='secret123'\n"
+    );
+    let output = fixture
+        .kms
+        .command()
+        .env_remove("FISH_VERSION")
+        .args(["env", "--shell", "auto", &secrets])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "export my_secret='secret123'\n"
+    );
+
+    let output = fixture.kms.run(&["env", "--shell", "csh", &secrets]);
+    assert_eq!(output.code, Some(2));
+}
+
+#[test]
+fn env_trim_underscore_prefix_renames_variables() {
+    let fixture = Fixture::new();
+    let path = fixture.encrypted_json(
+        "underscore.ejson",
+        json!({ "_HOST": "db.internal", "PASSWORD": "secret123" }),
+    );
+
+    assert_eq!(
+        fixture.kms.run_ok(&["env", &path]),
+        "export PASSWORD='secret123'\nexport _HOST='db.internal'\n"
+    );
+    assert_eq!(
+        fixture
+            .kms
+            .run_ok(&["env", "--trim-underscore-prefix", &path]),
+        "export HOST='db.internal'\nexport PASSWORD='secret123'\n"
+    );
+}
+
+#[test]
 fn env_without_an_environment_section_prints_nothing() {
     let fixture = Fixture::new();
     let path = fixture.write(

@@ -108,15 +108,20 @@ impl Client {
     /// A file with no `environment` key, or one that is not a map, gives an
     /// empty map rather than an error. Write the values as shell assignments
     /// with [`ejson::env::export`].
-    pub async fn decrypt_env(&self, ejson_file_path: impl AsRef<Path>) -> Result<SecretEnvMap> {
+    ///
+    /// With [`UnderscorePrefix::Trim`], the leading underscore that marks a
+    /// key as "leave unencrypted" is removed from the variable names
+    /// (`_HOST` is exported as `HOST`); [`UnderscorePrefix::Keep`] leaves
+    /// names as written.
+    pub async fn decrypt_env(
+        &self,
+        ejson_file_path: impl AsRef<Path>,
+        underscore_prefix: UnderscorePrefix,
+    ) -> Result<SecretEnvMap> {
         let file = self.open(ejson_file_path.as_ref()).await?;
 
-        let content = ejson::decrypt_bytes_typed(
-            &file.data,
-            file.key(),
-            file.format,
-            UnderscorePrefix::Keep,
-        )?;
+        let content =
+            ejson::decrypt_bytes_typed(&file.data, file.key(), file.format, underscore_prefix)?;
 
         match ejson::env::extract_env(&content) {
             Ok(values) => Ok(values),

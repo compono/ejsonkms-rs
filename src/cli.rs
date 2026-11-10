@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
-use ejson::Scheme;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use ejson::env::{ExportStyle, Shell};
+use ejson::{Scheme, UnderscorePrefix};
 use ejsonkms::{Client, KeyBinding, KeygenOptions};
 
 #[derive(Parser)]
@@ -115,9 +116,16 @@ impl KeygenArgs {
 pub(crate) struct EnvArgs {
     /// Suppress export statement
     #[arg(short, long)]
-    pub(crate) quiet: bool,
+    quiet: bool,
     #[command(flatten)]
     pub(crate) aws: AwsArgs,
+    /// Shell syntax to emit
+    #[arg(long = "shell", value_enum, default_value_t = ShellArg::Posix)]
+    shell: ShellArg,
+    /// Remove the leading underscore from variable names (`_HOST` is
+    /// exported as `HOST`)
+    #[arg(long = "trim-underscore-prefix")]
+    trim_underscore_prefix: bool,
     /// EJSON file to read secrets from
     #[arg(value_name = "FILE")]
     pub(crate) file: PathBuf,
@@ -144,5 +152,46 @@ impl RewrapArgs {
     /// The binding the flags ask for, or `None` to keep the file's own.
     pub(crate) fn binding(&self) -> Option<KeyBinding> {
         self.bind_public_key.then_some(KeyBinding::PublicKey)
+    }
+}
+
+/// Which shell syntax `env` writes.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ShellArg {
+    /// POSIX-compatible shells (bash, zsh, sh, ...): `export KEY='value'`
+    Posix,
+    /// Fish shell: `set -gx KEY 'value'`
+    Fish,
+    /// Fish syntax if `$FISH_VERSION` is set, otherwise POSIX. Fish doesn't
+    /// export it, so under fish this is usually POSIX, which fish also accepts.
+    Auto,
+}
+
+impl EnvArgs {
+    /// The shell syntax to write.
+    pub(crate) fn shell(&self) -> Shell {
+        match self.shell {
+            ShellArg::Posix => Shell::Posix,
+            ShellArg::Fish => Shell::Fish,
+            ShellArg::Auto => Shell::detect(),
+        }
+    }
+
+    /// Whether to export the variables or only assign them.
+    pub(crate) fn style(&self) -> ExportStyle {
+        if self.quiet {
+            ExportStyle::Unexported
+        } else {
+            ExportStyle::Exported
+        }
+    }
+
+    /// What to do with a leading underscore in variable names.
+    pub(crate) fn underscore_prefix(&self) -> UnderscorePrefix {
+        if self.trim_underscore_prefix {
+            UnderscorePrefix::Trim
+        } else {
+            UnderscorePrefix::Keep
+        }
     }
 }

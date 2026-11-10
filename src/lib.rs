@@ -17,7 +17,9 @@
 //!
 //! // ... and later decrypt the file.
 //! let plaintext = client.decrypt("secrets.ejson").await?;
-//! let environment = client.decrypt_env("secrets.ejson").await?;
+//! let environment = client
+//!     .decrypt_env("secrets.ejson", ejson::UnderscorePrefix::Keep)
+//!     .await?;
 //! # Ok(())
 //! # }
 //! ```

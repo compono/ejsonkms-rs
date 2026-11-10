@@ -8,7 +8,6 @@ use std::io::Write;
 use std::path::Path;
 
 use ejson::FileFormat;
-use ejson::env::{ExportStyle, Shell};
 
 use ejsonkms::Error;
 
@@ -165,17 +164,15 @@ fn already_exists(path: &Path) -> std::io::Error {
 /// Decrypt an EJSON file and write shell export statements for the values
 /// under its `environment` key.
 pub(crate) async fn env<W: Write>(args: &EnvArgs, output: &mut W) -> Result<(), CliError> {
-    let style = if args.quiet {
-        ExportStyle::Unexported
-    } else {
-        ExportStyle::Exported
-    };
+    let env_values = args
+        .aws
+        .client()
+        .await
+        .decrypt_env(&args.file, args.underscore_prefix())
+        .await?;
 
-    let env_values = args.aws.client().await.decrypt_env(&args.file).await?;
-
-    // POSIX `export KEY='value'` syntax, as before. ejson quotes values so
-    // that fish reads them identically.
-    ejson::env::export(output, &env_values, Shell::Posix, style)?;
+    // ejson quotes values so that POSIX shells and fish read them identically.
+    ejson::env::export(output, &env_values, args.shell(), args.style())?;
     Ok(())
 }
 
