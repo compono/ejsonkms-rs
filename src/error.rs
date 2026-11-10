@@ -1,0 +1,136 @@
+//! The errors ejsonkms reports.
+
+use ejson::FileFormat;
+use thiserror::Error;
+
+/// Errors that can occur during ejsonkms operations.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum EjsonKmsError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// The file could not be read or written as JSON.
+    #[error("json error: {0}")]
+    Json(SourceError),
+
+    /// The file could not be read or written as YAML.
+    #[error("yaml error: {0}")]
+    Yaml(SourceError),
+
+    /// The file could not be read or written as TOML.
+    #[error("toml error: {0}")]
+    Toml(SourceError),
+
+    #[error("utf-8 error: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+
+    #[error("missing _private_key_enc field")]
+    MissingPrivateKeyEnc,
+
+    /// `_private_key_enc` is not valid base64.
+    #[error("base64 decode error: {0}")]
+    Base64(SourceError),
+
+    /// KMS could not encrypt or decrypt the private key.
+    #[error(transparent)]
+    Kms(#[from] KmsError),
+
+    #[error(transparent)]
+    Ejson(#[from] ejson::EjsonError),
+
+    /// The file's `environment` section could not be used, for example
+    /// because a key is not a valid variable name.
+    #[error("could not load environment from file: {0}")]
+    Env(ejson::env::EnvError),
+
+    /// The file's `_kms_encryption_context` names a binding this version of
+    /// ejsonkms doesn't know.
+    #[error("unsupported _kms_encryption_context: {0:?}")]
+    UnsupportedEncryptionContext(String),
+
+    /// The file says its key is bound to `_public_key`, but has none.
+    #[error("missing _public_key field")]
+    MissingPublicKey,
+
+    /// A file format this version of ejsonkms doesn't know how to read or
+    /// write `_private_key_enc` in.
+    #[error("unsupported file format: {0}")]
+    UnsupportedFormat(FileFormat),
+}
+
+/// What went wrong talking to KMS.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum KmsError {
+    /// The KMS `Decrypt` call failed; the payload is the AWS SDK's message
+    /// (access denied, unknown key, no credentials, network failure, ...).
+    #[error("unable to decrypt parameter: {0}")]
+    Decrypt(String),
+
+    /// The KMS `Encrypt` call failed; the payload is the AWS SDK's message.
+    #[error("unable to encrypt parameter: {0}")]
+    Encrypt(String),
+
+    /// KMS answered a `Decrypt` call without a plaintext.
+    #[error("KMS decrypt returned no plaintext")]
+    NoPlaintext,
+
+    /// KMS answered an `Encrypt` call without a ciphertext.
+    #[error("KMS encrypt returned no ciphertext")]
+    NoCiphertext,
+
+    /// `_private_key_enc` decrypted to something that is not an ejson
+    /// private key: it is not valid UTF-8.
+    #[error("KMS decrypted key is not valid UTF-8")]
+    KeyNotUtf8,
+}
+
+impl EjsonKmsError {
+    pub(crate) fn json(err: serde_json::Error) -> Self {
+        Self::Json(SourceError::new(err))
+    }
+
+    pub(crate) fn yaml(err: serde_norway::Error) -> Self {
+        Self::Yaml(SourceError::new(err))
+    }
+
+    pub(crate) fn toml(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Toml(SourceError::new(err))
+    }
+
+    pub(crate) fn base64(err: base64::DecodeError) -> Self {
+        Self::Base64(SourceError::new(err))
+    }
+}
+
+/// An error from one of the parsers or encoders ejsonkms uses.
+///
+/// The concrete type is hidden so that those crates are not part of the
+/// ejsonkms API; upgrading one of them is then not a breaking change here.
+/// It displays the underlying error's message.
+pub struct SourceError(Box<dyn std::error::Error + Send + Sync + 'static>);
+
+impl SourceError {
+    fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(err))
+    }
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for SourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
