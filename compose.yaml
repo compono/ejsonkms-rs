@@ -1,6 +1,7 @@
 services:
   awskms:
-    image: "nsmithuk/local-kms"
+    # Pinned by digest: tests/local-kms.sh trusts what this image does.
+    image: "nsmithuk/local-kms:3.9.1@sha256:6d9a85da0865ea135e6d58aef6cdf2292fa0eb5c07c4bcd9b3adf7a34cea9eee"
     environment:
       REGION: us-east-1
       KMS_REGION: us-east-1

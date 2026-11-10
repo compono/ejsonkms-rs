@@ -3,6 +3,11 @@ Keys:
       KeyId: bc436485-5092-42b8-92a3-0aa8b93536dc
     BackingKeys:
       - 5cdaead27fe7da2de47945d73cd6d79e36494e73802f3cd3869f1d2cb0b5d7a9
+  # A second key, to rewrap to.
+  - Metadata:
+      KeyId: 7d3f0c2a-6b1e-4f5d-9a8c-2e4b6d8f0a1c
+    BackingKeys:
+      - 9a1f3c5e7b2d4f6a8c0e1b3d5f7a9c2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a
 
 Aliases:
   - AliasName: alias/testing
