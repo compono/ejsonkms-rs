@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 
 use crate::document::{detect_format, extract_private_key_enc, read_file_checked};
 use crate::kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms, new_kms_client};
-use crate::{EjsonKmsError, EjsonKmsKeys, KeyBinding, KeygenOptions};
+use crate::{EjsonKmsKeys, Error, KeyBinding, KeygenOptions, Result};
 
 /// Generates keypairs and decrypts secrets files, using AWS KMS to wrap and
 /// unwrap the private key.
@@ -18,7 +18,7 @@ use crate::{EjsonKmsError, EjsonKmsKeys, KeyBinding, KeygenOptions};
 /// underlying connection.
 ///
 /// ```no_run
-/// # async fn example() -> Result<(), ejsonkms::EjsonKmsError> {
+/// # async fn example() -> Result<(), ejsonkms::Error> {
 /// let client = ejsonkms::Client::builder()
 ///     .region("us-east-1")
 ///     .build()
@@ -56,11 +56,7 @@ impl Client {
     ///
     /// Write the result to a new secrets file with
     /// [`EjsonKmsKeys::to_document`].
-    pub async fn keygen(
-        &self,
-        kms_key_id: &str,
-        options: &KeygenOptions,
-    ) -> Result<EjsonKmsKeys, EjsonKmsError> {
+    pub async fn keygen(&self, kms_key_id: &str, options: &KeygenOptions) -> Result<EjsonKmsKeys> {
         let scheme = options.scheme;
         let GeneratedKeypair {
             public_key,
@@ -96,10 +92,7 @@ impl Client {
     ///
     /// The decrypted document is wrapped in [`Zeroizing`], so it is wiped from
     /// memory when dropped.
-    pub async fn decrypt(
-        &self,
-        ejson_file_path: impl AsRef<Path>,
-    ) -> Result<Zeroizing<Vec<u8>>, EjsonKmsError> {
+    pub async fn decrypt(&self, ejson_file_path: impl AsRef<Path>) -> Result<Zeroizing<Vec<u8>>> {
         let file = self.open(ejson_file_path.as_ref()).await?;
 
         let mut output = Zeroizing::new(Vec::new());
@@ -115,10 +108,7 @@ impl Client {
     /// A file with no `environment` key, or one that is not a map, gives an
     /// empty map rather than an error. Write the values as shell assignments
     /// with [`ejson::env::export`].
-    pub async fn decrypt_env(
-        &self,
-        ejson_file_path: impl AsRef<Path>,
-    ) -> Result<SecretEnvMap, EjsonKmsError> {
+    pub async fn decrypt_env(&self, ejson_file_path: impl AsRef<Path>) -> Result<SecretEnvMap> {
         let file = self.open(ejson_file_path.as_ref()).await?;
 
         let content = ejson::decrypt_bytes_typed(
@@ -131,12 +121,12 @@ impl Client {
         match ejson::env::extract_env(&content) {
             Ok(values) => Ok(values),
             Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
-            Err(e) => Err(EjsonKmsError::Env(e)),
+            Err(e) => Err(Error::Env(e)),
         }
     }
 
     /// Read `path` and ask KMS to decrypt its `_private_key_enc`.
-    async fn open(&self, path: &Path) -> Result<EncryptedFile, EjsonKmsError> {
+    async fn open(&self, path: &Path) -> Result<EncryptedFile> {
         let format = detect_format(path)?;
         let data = read_file_checked(path)?;
         let wrapped = extract_private_key_enc(&data, format)?;

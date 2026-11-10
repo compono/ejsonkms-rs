@@ -9,7 +9,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use zeroize::Zeroizing;
 
-use crate::{EjsonKmsError, KmsError, SourceError};
+use crate::{Error, KmsError, Result, SourceError};
 
 /// The KMS encryption context key that carries a file's public key.
 pub(crate) const PUBLIC_KEY_CONTEXT: &str = "ejsonkms_public_key";
@@ -49,10 +49,8 @@ pub(crate) async fn decrypt_private_key_with_kms(
     kms_svc: &aws_sdk_kms::Client,
     private_key_enc: &str,
     bound_public_key: Option<&str>,
-) -> Result<Zeroizing<String>, EjsonKmsError> {
-    let encrypted_value = BASE64
-        .decode(private_key_enc)
-        .map_err(EjsonKmsError::base64)?;
+) -> Result<Zeroizing<String>> {
+    let encrypted_value = BASE64.decode(private_key_enc).map_err(Error::base64)?;
 
     let mut request = kms_svc
         .decrypt()
@@ -83,7 +81,7 @@ pub(crate) async fn encrypt_private_key_with_kms(
     private_key: &str,
     kms_key_id: &str,
     bound_public_key: Option<&str>,
-) -> Result<String, EjsonKmsError> {
+) -> Result<String> {
     let mut request = kms_svc
         .encrypt()
         .key_id(kms_key_id)

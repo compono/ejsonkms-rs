@@ -7,20 +7,18 @@ use std::path::Path;
 use ejson::FileFormat;
 use serde::{Deserialize, Serialize};
 
-use crate::{EjsonKmsError, KeyBinding};
+use crate::{Error, KeyBinding, Result};
 
 /// The `_kms_encryption_context` value for a key bound to `_public_key`.
 const BOUND_TO_PUBLIC_KEY: &str = "public_key";
 
 /// What a file's `_kms_encryption_context` (or its absence) says the key is
 /// bound to.
-fn binding_from_marker(marker: Option<&str>) -> Result<KeyBinding, EjsonKmsError> {
+fn binding_from_marker(marker: Option<&str>) -> Result<KeyBinding> {
     match marker {
         None => Ok(KeyBinding::Unbound),
         Some(BOUND_TO_PUBLIC_KEY) => Ok(KeyBinding::PublicKey),
-        Some(other) => Err(EjsonKmsError::UnsupportedEncryptionContext(
-            other.to_string(),
-        )),
+        Some(other) => Err(Error::UnsupportedEncryptionContext(other.to_string())),
     }
 }
 
@@ -52,23 +50,23 @@ pub(crate) fn render(
     private_key_enc: &str,
     binding: KeyBinding,
     format: FileFormat,
-) -> Result<String, EjsonKmsError> {
+) -> Result<String> {
     let file = EjsonKmsFile {
         public_key,
         private_key_enc,
         encryption_context: marker_for(binding),
     };
     match format {
-        FileFormat::Json => serde_json::to_string_pretty(&file).map_err(EjsonKmsError::json),
-        FileFormat::Yaml => serde_norway::to_string(&file).map_err(EjsonKmsError::yaml),
-        FileFormat::Toml => toml::to_string(&file).map_err(EjsonKmsError::toml),
+        FileFormat::Json => serde_json::to_string_pretty(&file).map_err(Error::json),
+        FileFormat::Yaml => serde_norway::to_string(&file).map_err(Error::yaml),
+        FileFormat::Toml => toml::to_string(&file).map_err(Error::toml),
         // `FileFormat` may gain formats in a minor release of ejson.
-        other => Err(EjsonKmsError::UnsupportedFormat(other)),
+        other => Err(Error::UnsupportedFormat(other)),
     }
 }
 
 /// Detect the file format from the file extension.
-pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsError> {
+pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat> {
     Ok(FileFormat::from_path(file_path).map_err(ejson::EjsonError::from)?)
 }
 
@@ -78,11 +76,11 @@ pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsErro
 /// The limit is enforced on the bytes actually read rather than on the size
 /// reported beforehand, so a file that grows (or a device or pipe, which
 /// report no size) cannot be buffered without bound.
-pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsError> {
+pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>> {
     let read = || read_limited(std::fs::File::open(file_path)?, ejson::MAX_FILE_SIZE);
     // Say which file: an I/O error on its own names none.
     read().map_err(|err| match err {
-        EjsonKmsError::Io(source) => EjsonKmsError::ReadFile {
+        Error::Io(source) => Error::ReadFile {
             path: file_path.to_path_buf(),
             source,
         },
@@ -90,12 +88,12 @@ pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsErr
     })
 }
 
-fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>, EjsonKmsError> {
+fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     reader.take(max_size + 1).read_to_end(&mut data)?;
     // A length that doesn't fit in `u64` is certainly over the limit.
     if u64::try_from(data.len()).map_or(true, |len| len > max_size) {
-        return Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge));
+        return Err(Error::Ejson(ejson::EjsonError::FileTooLarge));
     }
     Ok(data)
 }
@@ -121,23 +119,21 @@ pub(crate) struct WrappedKey {
 
 /// Extract the `_private_key_enc` field, and what it is bound to, from raw
 /// EJSON/EYAML/ETOML file data.
-pub(crate) fn extract_private_key_enc(
-    data: &[u8],
-    format: FileFormat,
-) -> Result<WrappedKey, EjsonKmsError> {
+pub(crate) fn extract_private_key_enc(data: &[u8], format: FileFormat) -> Result<WrappedKey> {
     let fields: EjsonKmsFileFields = match format {
-        FileFormat::Json => serde_json::from_slice(data).map_err(EjsonKmsError::json)?,
-        FileFormat::Yaml => serde_norway::from_slice(data).map_err(EjsonKmsError::yaml)?,
-        FileFormat::Toml => toml::from_str(std::str::from_utf8(data).map_err(EjsonKmsError::toml)?)
-            .map_err(EjsonKmsError::toml)?,
+        FileFormat::Json => serde_json::from_slice(data).map_err(Error::json)?,
+        FileFormat::Yaml => serde_norway::from_slice(data).map_err(Error::yaml)?,
+        FileFormat::Toml => {
+            toml::from_str(std::str::from_utf8(data).map_err(Error::toml)?).map_err(Error::toml)?
+        }
         // `FileFormat` may gain formats in a minor release of ejson.
-        other => return Err(EjsonKmsError::UnsupportedFormat(other)),
+        other => return Err(Error::UnsupportedFormat(other)),
     };
 
     let private_key_enc = fields
         .private_key_enc
         .filter(|key| !key.is_empty())
-        .ok_or(EjsonKmsError::MissingPrivateKeyEnc)?;
+        .ok_or(Error::MissingPrivateKeyEnc)?;
 
     let bound_public_key = match binding_from_marker(fields.encryption_context.as_deref())? {
         KeyBinding::Unbound => None,
@@ -145,7 +141,7 @@ pub(crate) fn extract_private_key_enc(
             fields
                 .public_key
                 .filter(|key| !key.is_empty())
-                .ok_or(EjsonKmsError::MissingPublicKey)?,
+                .ok_or(Error::MissingPublicKey)?,
         ),
     };
 
@@ -197,7 +193,7 @@ mod tests {
         let missing = b"_public_key: abc\n";
         assert!(matches!(
             extract_private_key_enc(missing, FileFormat::Yaml),
-            Err(EjsonKmsError::MissingPrivateKeyEnc)
+            Err(Error::MissingPrivateKeyEnc)
         ));
     }
 
@@ -214,7 +210,7 @@ mod tests {
         let missing = b"_public_key = \"abc\"\n";
         assert!(matches!(
             extract_private_key_enc(missing, FileFormat::Toml),
-            Err(EjsonKmsError::MissingPrivateKeyEnc)
+            Err(Error::MissingPrivateKeyEnc)
         ));
     }
 
@@ -232,7 +228,7 @@ mod tests {
         let data = std::fs::read("testdata/test_no_private_key.ejson").unwrap();
         assert!(matches!(
             extract_private_key_enc(&data, FileFormat::Json),
-            Err(EjsonKmsError::MissingPrivateKeyEnc)
+            Err(Error::MissingPrivateKeyEnc)
         ));
     }
 
@@ -241,20 +237,20 @@ mod tests {
         let source = serde_json::from_slice::<serde_json::Value>(b"{").unwrap_err();
         let expected = format!("json error: {source}");
         let err = extract_private_key_enc(b"{", FileFormat::Json).unwrap_err();
-        assert!(matches!(err, EjsonKmsError::Json(_)));
+        assert!(matches!(err, Error::Json(_)));
         assert_eq!(err.to_string(), expected);
 
         let err = extract_private_key_enc(b"a: [", FileFormat::Yaml).unwrap_err();
-        assert!(matches!(err, EjsonKmsError::Yaml(_)));
+        assert!(matches!(err, Error::Yaml(_)));
         assert!(err.to_string().starts_with("yaml error: "), "{err}");
 
         let err = extract_private_key_enc(b"a = ", FileFormat::Toml).unwrap_err();
-        assert!(matches!(err, EjsonKmsError::Toml(_)));
+        assert!(matches!(err, Error::Toml(_)));
         assert!(err.to_string().starts_with("toml error: "), "{err}");
 
         let source =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "!").unwrap_err();
-        let err = EjsonKmsError::base64(source.clone());
+        let err = Error::base64(source.clone());
         assert_eq!(err.to_string(), format!("base64 decode error: {source}"));
     }
 
@@ -302,7 +298,7 @@ mod tests {
         let err = extract_private_key_enc(unknown, FileFormat::Json).unwrap_err();
         assert!(matches!(
             &err,
-            EjsonKmsError::UnsupportedEncryptionContext(name) if name == "v9"
+            Error::UnsupportedEncryptionContext(name) if name == "v9"
         ));
         assert_eq!(
             err.to_string(),
@@ -313,7 +309,7 @@ mod tests {
             br#"{"_private_key_enc": "encrypted", "_kms_encryption_context": "public_key"}"#;
         assert!(matches!(
             extract_private_key_enc(no_public_key, FileFormat::Json),
-            Err(EjsonKmsError::MissingPublicKey)
+            Err(Error::MissingPublicKey)
         ));
     }
 
@@ -322,12 +318,12 @@ mod tests {
         assert_eq!(read_limited(&b"12345"[..], 5).unwrap(), b"12345");
         assert!(matches!(
             read_limited(&b"123456"[..], 5),
-            Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
+            Err(Error::Ejson(ejson::EjsonError::FileTooLarge))
         ));
         // A source with no size to check up front.
         assert!(matches!(
             read_limited(std::io::repeat(0), 1024),
-            Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
+            Err(Error::Ejson(ejson::EjsonError::FileTooLarge))
         ));
     }
 
@@ -336,7 +332,7 @@ mod tests {
         let err = read_file_checked(Path::new("testdata/does_not_exist.ejson")).unwrap_err();
         assert!(matches!(
             &err,
-            EjsonKmsError::ReadFile { path, source }
+            Error::ReadFile { path, source }
                 if path == Path::new("testdata/does_not_exist.ejson")
                     && source.kind() == std::io::ErrorKind::NotFound
         ));
@@ -350,13 +346,13 @@ mod tests {
     #[test]
     fn test_toml_that_is_not_utf8_is_a_toml_error() {
         let err = extract_private_key_enc(&[0xff, 0xfe], FileFormat::Toml).unwrap_err();
-        assert!(matches!(err, EjsonKmsError::Toml(_)), "{err:?}");
+        assert!(matches!(err, Error::Toml(_)), "{err:?}");
         assert!(err.to_string().starts_with("toml error: "), "{err}");
     }
 
     #[test]
     fn test_unsupported_format_error_names_the_format() {
-        let err = EjsonKmsError::UnsupportedFormat(FileFormat::Toml);
+        let err = Error::UnsupportedFormat(FileFormat::Toml);
         assert_eq!(err.to_string(), "unsupported file format: TOML");
     }
 
@@ -367,7 +363,7 @@ mod tests {
         let err = detect_format(Path::new("secrets.txt")).unwrap_err();
         assert!(matches!(
             err,
-            EjsonKmsError::Ejson(ejson::EjsonError::FileFormat(_))
+            Error::Ejson(ejson::EjsonError::FileFormat(_))
         ));
         assert_eq!(err.to_string(), "unsupported file extension: txt");
     }

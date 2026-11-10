@@ -11,7 +11,7 @@ mod common;
 
 use common::{AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
 use ejson::{FileFormat, Scheme};
-use ejsonkms::{Client, EjsonKmsError, KeyBinding, KeygenOptions, KmsError};
+use ejsonkms::{Client, Error, KeyBinding, KeygenOptions, KmsError};
 use serde_json::json;
 
 #[test]
@@ -179,10 +179,7 @@ async fn library_api(kms: &MockKms) {
         .decrypt("testdata/test_no_private_key.ejson")
         .await
         .expect_err("decrypt should fail without _private_key_enc");
-    assert!(
-        matches!(err, EjsonKmsError::MissingPrivateKeyEnc),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::MissingPrivateKeyEnc), "{err:?}");
 
     // `_private_key_enc` that is not base64 never reaches KMS either.
     let bad_base64 = write("bad_base64.ejson", "!!!", json!({}));
@@ -190,7 +187,7 @@ async fn library_api(kms: &MockKms) {
         .decrypt(&bad_base64)
         .await
         .expect_err("decrypt should fail on invalid base64");
-    assert!(matches!(err, EjsonKmsError::Base64(_)), "{err:?}");
+    assert!(matches!(err, Error::Base64(_)), "{err:?}");
     assert_eq!(kms.requests().len(), requests);
 
     // KMS refuses to decrypt.
@@ -204,12 +201,12 @@ async fn library_api(kms: &MockKms) {
         .await
         .expect_err("decrypt should fail when KMS refuses");
     assert!(
-        matches!(&err, EjsonKmsError::Kms(KmsError::Decrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
+        matches!(&err, Error::Kms(KmsError::Decrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
         "{err:?}"
     );
 
     // The SDK's own error is still reachable for callers who want it.
-    let EjsonKmsError::Kms(KmsError::Decrypt(cause)) = &err else {
+    let Error::Kms(KmsError::Decrypt(cause)) = &err else {
         unreachable!()
     };
     assert!(std::error::Error::source(cause).is_some());
@@ -224,7 +221,7 @@ async fn library_api(kms: &MockKms) {
         .await
         .expect_err("keygen should fail when KMS refuses");
     assert!(
-        matches!(&err, EjsonKmsError::Kms(KmsError::Encrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
+        matches!(&err, Error::Kms(KmsError::Encrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
         "{err:?}"
     );
 
@@ -238,10 +235,7 @@ async fn library_api(kms: &MockKms) {
         .decrypt(&not_utf8)
         .await
         .expect_err("decrypt should fail on a non-UTF-8 key");
-    assert!(
-        matches!(err, EjsonKmsError::Kms(KmsError::KeyNotUtf8)),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::Kms(KmsError::KeyNotUtf8)), "{err:?}");
     assert_eq!(err.to_string(), "KMS decrypted key is not valid UTF-8");
 
     // A wrapped key that is text but not an ejson private key.
@@ -254,7 +248,7 @@ async fn library_api(kms: &MockKms) {
         .decrypt(&not_a_key)
         .await
         .expect_err("decrypt should fail on a malformed key");
-    assert!(matches!(err, EjsonKmsError::Ejson(_)), "{err:?}");
+    assert!(matches!(err, Error::Ejson(_)), "{err:?}");
 
     // An environment key that is not a valid variable name.
     let bad_env = write(
@@ -267,10 +261,7 @@ async fn library_api(kms: &MockKms) {
         .await
         .expect_err("decrypt_env should reject an invalid variable name");
     assert!(
-        matches!(
-            err,
-            EjsonKmsError::Env(ejson::env::EnvError::InvalidIdentifier(_))
-        ),
+        matches!(err, Error::Env(ejson::env::EnvError::InvalidIdentifier(_))),
         "{err:?}"
     );
 }

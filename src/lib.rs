@@ -6,7 +6,7 @@
 //! on the KMS key.
 //!
 //! ```no_run
-//! # async fn example() -> Result<(), ejsonkms::EjsonKmsError> {
+//! # async fn example() -> Result<(), ejsonkms::Error> {
 //! // Region and credentials come from the usual AWS configuration.
 //! let client = ejsonkms::Client::new().await;
 //!
@@ -30,5 +30,12 @@ mod keys;
 mod kms;
 
 pub use client::{Client, ClientBuilder};
-pub use error::{EjsonKmsError, KmsError, SourceError};
+pub use error::{Error, KmsError, SourceError};
+
+/// A `Result` whose error is [`enum@Error`].
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// The previous name of [`enum@Error`].
+#[deprecated(since = "3.0.0", note = "renamed to `ejsonkms::Error`")]
+pub type EjsonKmsError = Error;
 pub use keys::{EjsonKmsKeys, KeyBinding, KeygenOptions};

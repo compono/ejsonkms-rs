@@ -3,7 +3,7 @@
 use ejson::{FileFormat, Scheme};
 use zeroize::Zeroizing;
 
-use crate::{EjsonKmsError, document};
+use crate::{Result, document};
 
 /// Keys used in an EjsonKms file.
 ///
@@ -44,7 +44,7 @@ impl EjsonKmsKeys {
     /// `_kms_encryption_context` when the key is bound to the public key.
     ///
     /// The unencrypted private key is not part of the document.
-    pub fn to_document(&self, format: FileFormat) -> Result<String, EjsonKmsError> {
+    pub fn to_document(&self, format: FileFormat) -> Result<String> {
         document::render(
             &self.public_key,
             &self.private_key_enc,

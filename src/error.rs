@@ -8,7 +8,7 @@ use thiserror::Error;
 /// Errors that can occur during ejsonkms operations.
 #[derive(Error, Debug)]
 #[non_exhaustive]
-pub enum EjsonKmsError {
+pub enum Error {
     /// The secrets file could not be read.
     #[error("{}: {source}", path.display())]
     ReadFile {
@@ -104,7 +104,7 @@ pub enum KmsError {
     KeyNotUtf8,
 }
 
-impl EjsonKmsError {
+impl Error {
     pub(crate) fn json(err: serde_json::Error) -> Self {
         Self::Json(SourceError::new(err))
     }
