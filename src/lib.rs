@@ -25,6 +25,12 @@
 //! ```
 #![forbid(unsafe_code)]
 
+// Compile the 3.0 examples in the upgrade guide as doctests, so the guide
+// can't drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../UPGRADING.md")]
+struct UpgradingGuide;
+
 mod client;
 mod document;
 mod error;
