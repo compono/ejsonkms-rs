@@ -571,13 +571,9 @@ fn keygen_reports_a_kms_failure() {
     ]);
     assert_eq!(output.code, Some(1));
     assert_eq!(output.stdout, "");
-    assert!(
-        output
-            .stderr
-            .starts_with("Key generation failed: unable to encrypt parameter: ")
-            && output.stderr.contains("AccessDeniedException"),
-        "{}",
-        output.stderr
+    assert_eq!(
+        output.stderr,
+        "Key generation failed: unable to encrypt parameter: service error: AccessDeniedException: User is not authorized to perform: kms:Encrypt\n"
     );
     assert!(!out.exists(), "no file should be written when KMS fails");
 }
@@ -597,13 +593,9 @@ fn decrypt_reports_a_kms_failure() {
     let output = fixture.kms.run(&["decrypt", &path]);
     assert_eq!(output.code, Some(1));
     assert_eq!(output.stdout, "");
-    assert!(
-        output
-            .stderr
-            .starts_with("Decryption failed: unable to decrypt parameter: ")
-            && output.stderr.contains("AccessDeniedException"),
-        "{}",
-        output.stderr
+    assert_eq!(
+        output.stderr,
+        "Decryption failed: unable to decrypt parameter: service error: AccessDeniedException: User is not authorized to perform: kms:Decrypt\n"
     );
 }
 

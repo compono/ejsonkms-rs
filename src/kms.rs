@@ -3,6 +3,7 @@
 use aws_config::BehaviorVersion;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_kms::config::Region;
+use aws_sdk_kms::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_kms::primitives::Blob;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -121,10 +122,30 @@ impl<E: std::error::Error + 'static> std::error::Error for SdkFailure<E> {
     }
 }
 
-fn sdk_failure<E: std::error::Error + Send + Sync + 'static>(source: E) -> SourceError {
-    SourceError::new(SdkFailure {
-        message: error_chain(&source),
-        source,
+fn sdk_failure<E, R>(source: SdkError<E, R>) -> SourceError
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug + Send + Sync + 'static,
+{
+    let message = match source.as_service_error() {
+        // KMS answered with an error: its code and message say everything.
+        // Not every code has a type in the SDK (`AccessDeniedException`
+        // doesn't), and for those the SDK's own text is a `Debug` dump.
+        Some(error) => service_error_message(error.code(), error.message())
+            .unwrap_or_else(|| error_chain(&source)),
+        // No answer at all: the network, credentials, a timeout, ...
+        None => error_chain(&source),
+    };
+    SourceError::new(SdkFailure { message, source })
+}
+
+/// "service error: <code>: <message>", or without the message when KMS sent
+/// none. `None` when there is no code to show.
+fn service_error_message(code: Option<&str>, message: Option<&str>) -> Option<String> {
+    let code = code.filter(|code| !code.is_empty())?;
+    Some(match message.filter(|message| !message.is_empty()) {
+        Some(message) => format!("service error: {code}: {message}"),
+        None => format!("service error: {code}"),
     })
 }
 
@@ -163,6 +184,24 @@ mod tests {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             self.1.as_deref().map(|layer| layer as _)
         }
+    }
+
+    #[test]
+    fn test_service_error_message() {
+        assert_eq!(
+            service_error_message(Some("AccessDeniedException"), Some("not authorized")).as_deref(),
+            Some("service error: AccessDeniedException: not authorized")
+        );
+        assert_eq!(
+            service_error_message(Some("InvalidCiphertextException"), None).as_deref(),
+            Some("service error: InvalidCiphertextException")
+        );
+        assert_eq!(
+            service_error_message(Some("InvalidCiphertextException"), Some("")).as_deref(),
+            Some("service error: InvalidCiphertextException")
+        );
+        assert_eq!(service_error_message(None, Some("something")), None);
+        assert_eq!(service_error_message(Some(""), None), None);
     }
 
     #[test]
