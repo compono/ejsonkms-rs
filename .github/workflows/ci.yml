@@ -89,6 +89,45 @@ jobs:
         with:
           command: check bans licenses sources
 
+  # Build with the oldest toolchain Cargo.toml claims to support, so a change
+  # that needs a newer compiler is caught here instead of by a user.
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the toolchain named by rust-version
+        id: msrv
+        run: |
+          set -euo pipefail
+          MSRV=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$MSRV"
+          echo "Minimum supported Rust version: $MSRV"
+          rustup toolchain install "$MSRV" --profile minimal --no-self-update
+          echo "version=$MSRV" >> "$GITHUB_OUTPUT"
+
+      - name: Check
+        run: cargo +${{ steps.msrv.outputs.version }} check --locked --all-targets
+
+  # What `cargo publish` would upload: catches a missing file, a bad
+  # `exclude` or a manifest crates.io would reject before the release run.
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Publish dry run
+        run: cargo publish --dry-run --locked
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
