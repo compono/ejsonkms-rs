@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use ejson::FileFormat;
 use ejson::env::{ExportStyle, Shell};
 
-use ejsonkms::EjsonKmsError;
+use ejsonkms::{EjsonKmsError, KeygenOptions};
 
 /// What a command failed with: an [`EjsonKmsError`], or an ejson error from
 /// a step that doesn't involve KMS.
@@ -140,6 +140,7 @@ pub(crate) async fn keygen_action(
     aws_region: Option<&str>,
     out_file: Option<&Path>,
     show_private_key: bool,
+    options: &KeygenOptions,
 ) -> Result<(), CliError> {
     // Fail before asking KMS for anything; `create_new` below still guards
     // against the file appearing in the meantime.
@@ -149,7 +150,7 @@ pub(crate) async fn keygen_action(
         return Err(EjsonKmsError::from(already_exists(path)).into());
     }
 
-    let ejson_kms_keys = ejsonkms::keygen(kms_key_id, aws_region).await?;
+    let ejson_kms_keys = ejsonkms::keygen(kms_key_id, aws_region, options).await?;
 
     let format = out_file
         .and_then(|path| FileFormat::from_path(path).ok())

@@ -8,7 +8,8 @@
 //! ```no_run
 //! # async fn example() -> Result<(), ejsonkms::EjsonKmsError> {
 //! // Create a keypair whose private key is wrapped by a KMS key ...
-//! let keys = ejsonkms::keygen("alias/my-key", Some("us-east-1")).await?;
+//! let options = ejsonkms::KeygenOptions::default();
+//! let keys = ejsonkms::keygen("alias/my-key", Some("us-east-1"), &options).await?;
 //! std::fs::write("secrets.ejson", keys.to_document(ejson::FileFormat::Json)?)?;
 //!
 //! // ... and later decrypt the file; `None` uses the default AWS region chain.
@@ -72,6 +73,15 @@ pub enum EjsonKmsError {
     /// because a key is not a valid variable name.
     #[error("could not load environment from file: {0}")]
     Env(ejson::env::EnvError),
+
+    /// The file's `_kms_encryption_context` names a binding this version of
+    /// ejsonkms doesn't know.
+    #[error("unsupported _kms_encryption_context: {0:?}")]
+    UnsupportedEncryptionContext(String),
+
+    /// The file says its key is bound to `_public_key`, but has none.
+    #[error("missing _public_key field")]
+    MissingPublicKey,
 
     /// A file format this version of ejsonkms doesn't know how to read or
     /// write `_private_key_enc` in.
@@ -169,6 +179,11 @@ pub struct EjsonKmsKeys {
     /// The unencrypted private key. Nothing needs it once the file is
     /// written; keep it out of logs.
     pub private_key: Zeroizing<String>,
+    /// The scheme the keypair is for.
+    pub scheme: Scheme,
+    /// Whether `private_key_enc` is bound to `public_key` through the KMS
+    /// encryption context (see [`KeygenOptions::bind_public_key`]).
+    pub bound_to_public_key: bool,
 }
 
 impl std::fmt::Debug for EjsonKmsKeys {
@@ -177,6 +192,8 @@ impl std::fmt::Debug for EjsonKmsKeys {
             .field("public_key", &self.public_key)
             .field("private_key_enc", &self.private_key_enc)
             .field("private_key", &"[REDACTED]")
+            .field("scheme", &self.scheme)
+            .field("bound_to_public_key", &self.bound_to_public_key)
             .finish()
     }
 }
@@ -187,17 +204,27 @@ struct EjsonKmsFile<'a> {
     public_key: &'a str,
     #[serde(rename = "_private_key_enc")]
     private_key_enc: &'a str,
+    #[serde(
+        rename = "_kms_encryption_context",
+        skip_serializing_if = "Option::is_none"
+    )]
+    encryption_context: Option<&'a str>,
 }
+
+/// The `_kms_encryption_context` value for a key bound to `_public_key`.
+const BOUND_TO_PUBLIC_KEY: &str = "public_key";
 
 impl EjsonKmsKeys {
     /// Render a new, empty secrets file holding these keys: `_public_key`
-    /// and the KMS-encrypted `_private_key_enc`, in the given format.
+    /// and the KMS-encrypted `_private_key_enc`, in the given format, plus
+    /// `_kms_encryption_context` when the key is bound to the public key.
     ///
     /// The unencrypted private key is not part of the document.
     pub fn to_document(&self, format: FileFormat) -> Result<String, EjsonKmsError> {
         let file = EjsonKmsFile {
             public_key: &self.public_key,
             private_key_enc: &self.private_key_enc,
+            encryption_context: self.bound_to_public_key.then_some(BOUND_TO_PUBLIC_KEY),
         };
         match format {
             FileFormat::Json => serde_json::to_string_pretty(&file).map_err(EjsonKmsError::json),
@@ -209,26 +236,83 @@ impl EjsonKmsKeys {
     }
 }
 
+/// How [`keygen`] should generate a keypair.
+///
+/// The default is a `v1` keypair, which every version of ejson and ejsonkms
+/// (including the Go tools) can use.
+///
+/// ```
+/// use ejsonkms::KeygenOptions;
+///
+/// let options = KeygenOptions::default().scheme(ejson::Scheme::V2);
+/// ```
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct KeygenOptions {
+    /// The key scheme: [`Scheme::V1`] (NaCl box, the default) or
+    /// [`Scheme::V2`] (hybrid X25519 + ML-KEM-768, post-quantum). The Go
+    /// tools cannot read `v2` files.
+    pub scheme: Scheme,
+    /// Bind the KMS-encrypted private key to the public key, using the KMS
+    /// encryption context `ejsonkms_public_key = <public key>`.
+    ///
+    /// KMS then only decrypts the private key for a file that still has the
+    /// same `_public_key`, so the wrapped key cannot be reused in another
+    /// file, and IAM policies and CloudTrail can refer to the context. The
+    /// file records this as `"_kms_encryption_context": "public_key"`.
+    ///
+    /// Off by default: ejsonkms before 3.0 and the Go tool cannot decrypt
+    /// a file created this way.
+    pub bind_public_key: bool,
+}
+
+impl KeygenOptions {
+    /// Set the key scheme.
+    #[must_use]
+    pub fn scheme(mut self, scheme: Scheme) -> Self {
+        self.scheme = scheme;
+        self
+    }
+
+    /// Set whether to bind the encrypted private key to the public key; see
+    /// [`bind_public_key`](Self::bind_public_key).
+    #[must_use]
+    pub fn bind_public_key(mut self, bind: bool) -> Self {
+        self.bind_public_key = bind;
+        self
+    }
+}
+
 /// Generate keys and prepare an EJSON file with them.
 ///
 /// The generated private key is encrypted with the given KMS key.
 pub async fn keygen(
     kms_key_id: &str,
     aws_region: Option<&str>,
+    options: &KeygenOptions,
 ) -> Result<EjsonKmsKeys, EjsonKmsError> {
+    let scheme = options.scheme;
     let GeneratedKeypair {
         public_key,
         private_key,
         ..
-    } = ejson::generate_keypair(Scheme::V1);
+    } = ejson::generate_keypair(scheme);
 
-    let private_key_enc =
-        encrypt_private_key_with_kms(&private_key, kms_key_id, aws_region).await?;
+    let bound_to_public_key = options.bind_public_key;
+    let private_key_enc = encrypt_private_key_with_kms(
+        &private_key,
+        kms_key_id,
+        bound_to_public_key.then_some(public_key.as_str()),
+        aws_region,
+    )
+    .await?;
 
     Ok(EjsonKmsKeys {
         public_key,
         private_key_enc,
         private_key,
+        scheme,
+        bound_to_public_key,
     })
 }
 
@@ -288,8 +372,13 @@ impl EncryptedFile {
     async fn open(path: &Path, aws_region: Option<&str>) -> Result<Self, EjsonKmsError> {
         let format = detect_format(path)?;
         let data = read_file_checked(path)?;
-        let private_key_enc = extract_private_key_enc(&data, format)?;
-        let private_key = decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+        let wrapped = extract_private_key_enc(&data, format)?;
+        let private_key = decrypt_private_key_with_kms(
+            &wrapped.private_key_enc,
+            wrapped.bound_public_key.as_deref(),
+            aws_region,
+        )
+        .await?;
 
         Ok(Self {
             data,
@@ -331,15 +420,29 @@ fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>, EjsonKmsErr
 
 #[derive(Deserialize)]
 struct EjsonKmsFileFields {
+    #[serde(rename = "_public_key", default)]
+    public_key: Option<String>,
     #[serde(rename = "_private_key_enc", default)]
     private_key_enc: Option<String>,
+    #[serde(rename = "_kms_encryption_context", default)]
+    encryption_context: Option<String>,
 }
 
-/// Extract the `_private_key_enc` field from raw EJSON/EYAML/ETOML file data.
+/// The KMS-encrypted private key found in a file.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WrappedKey {
+    /// `_private_key_enc`.
+    pub(crate) private_key_enc: String,
+    /// The file's `_public_key`, when the file says the key is bound to it.
+    pub(crate) bound_public_key: Option<String>,
+}
+
+/// Extract the `_private_key_enc` field, and what it is bound to, from raw
+/// EJSON/EYAML/ETOML file data.
 pub(crate) fn extract_private_key_enc(
     data: &[u8],
     format: FileFormat,
-) -> Result<String, EjsonKmsError> {
+) -> Result<WrappedKey, EjsonKmsError> {
     let fields: EjsonKmsFileFields = match format {
         FileFormat::Json => serde_json::from_slice(data).map_err(EjsonKmsError::json)?,
         FileFormat::Yaml => serde_norway::from_slice(data).map_err(EjsonKmsError::yaml)?,
@@ -350,10 +453,30 @@ pub(crate) fn extract_private_key_enc(
         other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };
 
-    match fields.private_key_enc {
-        Some(key) if !key.is_empty() => Ok(key),
-        _ => Err(EjsonKmsError::MissingPrivateKeyEnc),
-    }
+    let private_key_enc = fields
+        .private_key_enc
+        .filter(|key| !key.is_empty())
+        .ok_or(EjsonKmsError::MissingPrivateKeyEnc)?;
+
+    let bound_public_key = match fields.encryption_context.as_deref() {
+        None => None,
+        Some(BOUND_TO_PUBLIC_KEY) => Some(
+            fields
+                .public_key
+                .filter(|key| !key.is_empty())
+                .ok_or(EjsonKmsError::MissingPublicKey)?,
+        ),
+        Some(other) => {
+            return Err(EjsonKmsError::UnsupportedEncryptionContext(
+                other.to_string(),
+            ));
+        }
+    };
+
+    Ok(WrappedKey {
+        private_key_enc,
+        bound_public_key,
+    })
 }
 
 #[cfg(test)]
@@ -364,7 +487,9 @@ mod tests {
     fn test_extract_private_key_enc() {
         let data = br#"{"_public_key": "abc", "_private_key_enc": "encrypted"}"#;
         assert_eq!(
-            extract_private_key_enc(data, FileFormat::Json).unwrap(),
+            extract_private_key_enc(data, FileFormat::Json)
+                .unwrap()
+                .private_key_enc,
             "encrypted"
         );
     }
@@ -387,7 +512,9 @@ mod tests {
     fn test_extract_private_key_enc_yaml() {
         let data = b"_public_key: abc\n_private_key_enc: encrypted\n";
         assert_eq!(
-            extract_private_key_enc(data, FileFormat::Yaml).unwrap(),
+            extract_private_key_enc(data, FileFormat::Yaml)
+                .unwrap()
+                .private_key_enc,
             "encrypted"
         );
 
@@ -402,7 +529,9 @@ mod tests {
     fn test_extract_private_key_enc_toml() {
         let data = b"_public_key = \"abc\"\n_private_key_enc = \"encrypted\"\n";
         assert_eq!(
-            extract_private_key_enc(data, FileFormat::Toml).unwrap(),
+            extract_private_key_enc(data, FileFormat::Toml)
+                .unwrap()
+                .private_key_enc,
             "encrypted"
         );
 
@@ -416,7 +545,9 @@ mod tests {
     #[test]
     fn test_extract_private_key_enc_from_testdata() {
         let data = std::fs::read("testdata/test.ejson").unwrap();
-        let key = extract_private_key_enc(&data, FileFormat::Json).unwrap();
+        let key = extract_private_key_enc(&data, FileFormat::Json)
+            .unwrap()
+            .private_key_enc;
         assert!(key.starts_with("S2Fybjphd3M6a21z"));
     }
 
@@ -449,6 +580,65 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "!").unwrap_err();
         let err = EjsonKmsError::base64(source.clone());
         assert_eq!(err.to_string(), format!("base64 decode error: {source}"));
+    }
+
+    #[test]
+    fn test_extract_encryption_context() {
+        // No marker: the key is not bound to anything.
+        let legacy = br#"{"_public_key": "abc", "_private_key_enc": "encrypted"}"#;
+        assert_eq!(
+            extract_private_key_enc(legacy, FileFormat::Json).unwrap(),
+            WrappedKey {
+                private_key_enc: "encrypted".to_string(),
+                bound_public_key: None,
+            }
+        );
+
+        let bound = br#"{"_public_key": "abc", "_private_key_enc": "encrypted", "_kms_encryption_context": "public_key"}"#;
+        assert_eq!(
+            extract_private_key_enc(bound, FileFormat::Json).unwrap(),
+            WrappedKey {
+                private_key_enc: "encrypted".to_string(),
+                bound_public_key: Some("abc".to_string()),
+            }
+        );
+
+        let yaml =
+            b"_public_key: abc\n_private_key_enc: encrypted\n_kms_encryption_context: public_key\n";
+        assert_eq!(
+            extract_private_key_enc(yaml, FileFormat::Yaml)
+                .unwrap()
+                .bound_public_key
+                .as_deref(),
+            Some("abc")
+        );
+
+        let toml = b"_public_key = \"abc\"\n_private_key_enc = \"encrypted\"\n_kms_encryption_context = \"public_key\"\n";
+        assert_eq!(
+            extract_private_key_enc(toml, FileFormat::Toml)
+                .unwrap()
+                .bound_public_key
+                .as_deref(),
+            Some("abc")
+        );
+
+        let unknown = br#"{"_public_key": "abc", "_private_key_enc": "encrypted", "_kms_encryption_context": "v9"}"#;
+        let err = extract_private_key_enc(unknown, FileFormat::Json).unwrap_err();
+        assert!(matches!(
+            &err,
+            EjsonKmsError::UnsupportedEncryptionContext(name) if name == "v9"
+        ));
+        assert_eq!(
+            err.to_string(),
+            r#"unsupported _kms_encryption_context: "v9""#
+        );
+
+        let no_public_key =
+            br#"{"_private_key_enc": "encrypted", "_kms_encryption_context": "public_key"}"#;
+        assert!(matches!(
+            extract_private_key_enc(no_public_key, FileFormat::Json),
+            Err(EjsonKmsError::MissingPublicKey)
+        ));
     }
 
     #[test]

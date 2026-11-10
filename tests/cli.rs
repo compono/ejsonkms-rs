@@ -281,6 +281,165 @@ fn keygen_o_writes_the_format_of_the_extension_and_prints_nothing() {
 }
 
 #[test]
+fn keygen_v2_files_encrypt_and_decrypt() {
+    let fixture = Fixture::new();
+
+    for (name, flags) in [
+        ("pqc.ejson", &["--pqc"][..]),
+        ("v2.ejson", &["--scheme", "v2"]),
+    ] {
+        let path = fixture.path(name);
+        let path = path.to_str().unwrap();
+        let mut args = vec!["keygen", "--kms-key-id", KMS_KEY_ID, "-o", path];
+        args.extend_from_slice(flags);
+        fixture.kms.run_ok(&args);
+
+        let mut document: serde_json::Value = serde_json::from_str(&read(path)).unwrap();
+        assert_ne!(
+            document["_public_key"].as_str().unwrap().len(),
+            64,
+            "{name}: expected a v2 public key"
+        );
+        document["environment"] = json!({ "my_secret": "secret123" });
+        std::fs::write(path, document.to_string()).unwrap();
+
+        fixture.kms.run_ok(&["encrypt", path]);
+        let encrypted = read(path);
+        assert!(encrypted.contains("EJ[2:"), "{name}: {encrypted}");
+        assert!(!encrypted.contains("secret123"), "{name}");
+
+        assert_eq!(
+            fixture.kms.run_ok(&["env", path]),
+            "export my_secret='secret123'\n",
+            "{name}"
+        );
+    }
+
+    let output = fixture
+        .kms
+        .run(&["keygen", "--kms-key-id", KMS_KEY_ID, "--scheme", "v9"]);
+    assert_eq!(output.code, Some(2));
+    assert_eq!(output.stdout, "");
+}
+
+/// `keygen --bind-public-key -o <name>`, then add a secret and encrypt.
+fn bound_secrets(fixture: &Fixture, name: &str) -> (String, serde_json::Value) {
+    let path = fixture.path(name);
+    let path = path.to_str().unwrap().to_string();
+    fixture.kms.run_ok(&[
+        "keygen",
+        "--kms-key-id",
+        KMS_KEY_ID,
+        "--bind-public-key",
+        "-o",
+        &path,
+    ]);
+    let mut document: serde_json::Value = serde_json::from_str(&read(&path)).unwrap();
+    document["environment"] = json!({ "my_secret": "secret123" });
+    std::fs::write(&path, document.to_string()).unwrap();
+    fixture.kms.run_ok(&["encrypt", &path]);
+    let document = serde_json::from_str(&read(&path)).unwrap();
+    (path, document)
+}
+
+#[test]
+fn keygen_bind_public_key_uses_a_kms_encryption_context() {
+    let fixture = Fixture::new();
+    let (path, document) = bound_secrets(&fixture, "bound.ejson");
+    let public_key = document["_public_key"].as_str().unwrap();
+    let context = json!({ "ejsonkms_public_key": public_key });
+
+    // The file records the binding, in the clear, and encrypt leaves it alone.
+    assert_eq!(document["_kms_encryption_context"], "public_key");
+
+    // KMS was asked to encrypt under that context ...
+    let (_, wrapped_context) = common::unwrap(document["_private_key_enc"].as_str().unwrap());
+    assert_eq!(wrapped_context, context);
+
+    // ... and decrypt presents the same one.
+    assert_eq!(
+        fixture.kms.run_ok(&["env", &path]),
+        "export my_secret='secret123'\n"
+    );
+    let request = fixture.kms.requests().pop().unwrap();
+    assert_eq!(request.operation, "Decrypt");
+    assert_eq!(request.body["EncryptionContext"], context);
+}
+
+#[test]
+fn files_without_the_marker_send_no_encryption_context() {
+    let fixture = Fixture::new();
+    let secrets = fixture.secrets();
+
+    fixture.kms.run_ok(&["decrypt", &secrets]);
+    let request = fixture.kms.requests().pop().unwrap();
+    assert_eq!(request.operation, "Decrypt");
+    assert!(
+        request.body.get("EncryptionContext").is_none(),
+        "{request:?}"
+    );
+}
+
+#[test]
+fn a_bound_key_cannot_be_used_from_another_file() {
+    let fixture = Fixture::new();
+    let (_, bound) = bound_secrets(&fixture, "bound.ejson");
+    let (_, other) = bound_secrets(&fixture, "other.ejson");
+
+    let expect_refused = |name: &str, document: &serde_json::Value| {
+        let path = fixture.write(name, &document.to_string());
+        let output = fixture.kms.run(&["decrypt", &path]);
+        assert_eq!(output.code, Some(1), "{name}");
+        assert_eq!(output.stdout, "", "{name}");
+        assert!(
+            output
+                .stderr
+                .starts_with("Decryption failed: unable to decrypt parameter: ")
+                && output.stderr.contains("InvalidCiphertextException"),
+            "{name}: {}",
+            output.stderr
+        );
+    };
+
+    // The wrapped key lifted into a file with a different public key.
+    let mut lifted = other.clone();
+    lifted["_private_key_enc"] = bound["_private_key_enc"].clone();
+    expect_refused("lifted.ejson", &lifted);
+
+    // The marker removed, so no context is presented.
+    let mut stripped = bound.clone();
+    stripped
+        .as_object_mut()
+        .unwrap()
+        .remove("_kms_encryption_context");
+    expect_refused("stripped.ejson", &stripped);
+
+    // A marker added to a key that was not bound.
+    let unbound = fixture.secrets();
+    let mut marked: serde_json::Value = serde_json::from_str(&read(&unbound)).unwrap();
+    marked["_kms_encryption_context"] = json!("public_key");
+    expect_refused("marked.ejson", &marked);
+}
+
+#[test]
+fn an_unknown_encryption_context_marker_is_rejected_without_calling_kms() {
+    let fixture = Fixture::new();
+    let secrets = fixture.secrets();
+    let mut document: serde_json::Value = serde_json::from_str(&read(&secrets)).unwrap();
+    document["_kms_encryption_context"] = json!("something_else");
+    let path = fixture.write("unknown.ejson", &document.to_string());
+    let requests = fixture.kms.requests().len();
+
+    let output = fixture.kms.run(&["decrypt", &path]);
+    assert_eq!(output.code, Some(1));
+    assert_eq!(
+        output.stderr,
+        "Decryption failed: unsupported _kms_encryption_context: \"something_else\"\n"
+    );
+    assert_eq!(fixture.kms.requests().len(), requests);
+}
+
+#[test]
 fn keygen_o_refuses_to_overwrite_an_existing_file() {
     let fixture = Fixture::new();
     let secrets = fixture.secrets();

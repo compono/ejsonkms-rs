@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use ejson::Scheme;
+use ejsonkms::KeygenOptions;
 
 mod actions;
 
@@ -54,6 +56,18 @@ enum Command {
         /// the file: KMS decrypts the copy stored in it)
         #[arg(long = "show-private-key")]
         show_private_key: bool,
+        /// Key scheme to generate: v1 (NaCl box, readable by every ejson
+        /// and ejsonkms) or v2 (hybrid post-quantum)
+        #[arg(long = "scheme", default_value = "v1")]
+        scheme: Scheme,
+        /// Generate a v2 hybrid X25519 + ML-KEM-768 keypair (alias for --scheme v2)
+        #[arg(long = "pqc")]
+        pqc: bool,
+        /// bind the encrypted private key to the public key with a KMS
+        /// encryption context (not readable by ejsonkms before 3.0 or the
+        /// Go tool)
+        #[arg(long = "bind-public-key")]
+        bind_public_key: bool,
     },
     /// print shell export statements
     Env {
@@ -126,6 +140,9 @@ fn main() -> ExitCode {
             aws_region,
             out,
             show_private_key,
+            scheme,
+            pqc,
+            bind_public_key,
         } => (
             "Key generation failed",
             block_on(actions::keygen_action(
@@ -133,6 +150,9 @@ fn main() -> ExitCode {
                 aws_region.as_deref(),
                 out.as_deref(),
                 show_private_key,
+                &KeygenOptions::default()
+                    .scheme(if pqc { Scheme::V2 } else { scheme })
+                    .bind_public_key(bind_public_key),
             )),
         ),
         Command::Env {
