@@ -49,9 +49,7 @@ pub(crate) fn render(
 
 /// Detect the file format from the file extension.
 pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsError> {
-    FileFormat::from_path(file_path)
-        .map_err(ejson::EjsonError::from)
-        .map_err(EjsonKmsError::from)
+    Ok(FileFormat::from_path(file_path).map_err(ejson::EjsonError::from)?)
 }
 
 /// Read a file, failing once more than `ejson::MAX_FILE_SIZE` bytes have
@@ -67,7 +65,8 @@ pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsErr
 fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>, EjsonKmsError> {
     let mut data = Vec::new();
     reader.take(max_size + 1).read_to_end(&mut data)?;
-    if data.len() as u64 > max_size {
+    // A length that doesn't fit in `u64` is certainly over the limit.
+    if u64::try_from(data.len()).map_or(true, |len| len > max_size) {
         return Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge));
     }
     Ok(data)
