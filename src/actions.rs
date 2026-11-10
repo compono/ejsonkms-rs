@@ -7,8 +7,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use ejson::env::{ExportStyle, Shell};
 use ejson::FileFormat;
+use ejson::env::{ExportStyle, Shell};
 
 use ejsonkms::EjsonKmsError;
 
@@ -143,10 +143,10 @@ pub(crate) async fn keygen_action(
 ) -> Result<(), CliError> {
     // Fail before asking KMS for anything; `create_new` below still guards
     // against the file appearing in the meantime.
-    if let Some(path) = out_file {
-        if path.exists() {
-            return Err(EjsonKmsError::from(already_exists(path)).into());
-        }
+    if let Some(path) = out_file
+        && path.exists()
+    {
+        return Err(EjsonKmsError::from(already_exists(path)).into());
     }
 
     let ejson_kms_keys = ejsonkms::keygen(kms_key_id, aws_region).await?;

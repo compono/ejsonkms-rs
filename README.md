@@ -112,13 +112,13 @@ key is provided:
 
 ```
 docker compose up -d awskms
-export FAKE_AWSKMS_URL=http://localhost:8080
+export AWS_ENDPOINT_URL_KMS=http://localhost:8080
 export AWS_ACCESS_KEY_ID=123 AWS_SECRET_ACCESS_KEY=xyz AWS_REGION=us-east-1
 ejsonkms keygen --kms-key-id bc436485-5092-42b8-92a3-0aa8b93536dc -o secrets.ejson
 ```
 
-When `FAKE_AWSKMS_URL` is set, the KMS client is pointed at that endpoint
-instead of AWS.
+`AWS_ENDPOINT_URL_KMS` is the AWS SDK's own setting for the KMS endpoint. (`FAKE_AWSKMS_URL`, which
+earlier versions and the Go tool read, is no longer used.)
 
 ## Releasing
 

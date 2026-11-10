@@ -21,6 +21,7 @@
 
 mod kms;
 
+use std::io::Read;
 use std::path::Path;
 
 use ejson::env::SecretEnvMap;
@@ -245,22 +246,10 @@ pub async fn decrypt(
     ejson_file_path: impl AsRef<Path>,
     aws_region: Option<&str>,
 ) -> Result<Zeroizing<Vec<u8>>, EjsonKmsError> {
-    let ejson_file_path = ejson_file_path.as_ref();
-    let format = detect_format(ejson_file_path)?;
-    let data = read_file_checked(ejson_file_path)?;
-
-    let private_key_enc = extract_private_key_enc(&data, format)?;
-
-    let kms_decrypted_private_key =
-        decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+    let file = EncryptedFile::open(ejson_file_path.as_ref(), aws_region).await?;
 
     let mut output = Zeroizing::new(Vec::new());
-    ejson::decrypt(
-        &data[..],
-        &mut *output,
-        KeySource::PrivateKey(&kms_decrypted_private_key),
-        format,
-    )?;
+    ejson::decrypt(&file.data[..], &mut *output, file.key(), file.format)?;
 
     Ok(output)
 }
@@ -275,26 +264,42 @@ pub async fn decrypt_env(
     ejson_file_path: impl AsRef<Path>,
     aws_region: Option<&str>,
 ) -> Result<SecretEnvMap, EjsonKmsError> {
-    let ejson_file_path = ejson_file_path.as_ref();
-    let format = detect_format(ejson_file_path)?;
-    let data = read_file_checked(ejson_file_path)?;
+    let file = EncryptedFile::open(ejson_file_path.as_ref(), aws_region).await?;
 
-    let private_key_enc = extract_private_key_enc(&data, format)?;
-
-    let kms_decrypted_private_key =
-        decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
-
-    let content = ejson::decrypt_bytes_typed(
-        &data,
-        KeySource::PrivateKey(&kms_decrypted_private_key),
-        format,
-        UnderscorePrefix::Keep,
-    )?;
+    let content =
+        ejson::decrypt_bytes_typed(&file.data, file.key(), file.format, UnderscorePrefix::Keep)?;
 
     match ejson::env::extract_env(&content) {
         Ok(values) => Ok(values),
         Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
         Err(e) => Err(EjsonKmsError::Env(e)),
+    }
+}
+
+/// A secrets file read from disk, with its private key recovered via KMS.
+struct EncryptedFile {
+    data: Vec<u8>,
+    format: FileFormat,
+    private_key: Zeroizing<String>,
+}
+
+impl EncryptedFile {
+    /// Read `path` and ask KMS to decrypt its `_private_key_enc`.
+    async fn open(path: &Path, aws_region: Option<&str>) -> Result<Self, EjsonKmsError> {
+        let format = detect_format(path)?;
+        let data = read_file_checked(path)?;
+        let private_key_enc = extract_private_key_enc(&data, format)?;
+        let private_key = decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+
+        Ok(Self {
+            data,
+            format,
+            private_key,
+        })
+    }
+
+    fn key(&self) -> KeySource<'_> {
+        KeySource::PrivateKey(&self.private_key)
     }
 }
 
@@ -305,14 +310,23 @@ pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsErro
         .map_err(EjsonKmsError::from)
 }
 
-/// Read a file, rejecting anything larger than `ejson::MAX_FILE_SIZE` before
-/// loading it into memory.
+/// Read a file, failing once more than `ejson::MAX_FILE_SIZE` bytes have
+/// been read.
+///
+/// The limit is enforced on the bytes actually read rather than on the size
+/// reported beforehand, so a file that grows (or a device or pipe, which
+/// report no size) cannot be buffered without bound.
 pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsError> {
-    let metadata = std::fs::metadata(file_path)?;
-    if metadata.len() > ejson::MAX_FILE_SIZE {
+    read_limited(std::fs::File::open(file_path)?, ejson::MAX_FILE_SIZE)
+}
+
+fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>, EjsonKmsError> {
+    let mut data = Vec::new();
+    reader.take(max_size + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > max_size {
         return Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge));
     }
-    Ok(std::fs::read(file_path)?)
+    Ok(data)
 }
 
 #[derive(Deserialize)]
@@ -435,6 +449,20 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "!").unwrap_err();
         let err = EjsonKmsError::base64(source.clone());
         assert_eq!(err.to_string(), format!("base64 decode error: {source}"));
+    }
+
+    #[test]
+    fn test_read_limited_enforces_the_limit_on_bytes_read() {
+        assert_eq!(read_limited(&b"12345"[..], 5).unwrap(), b"12345");
+        assert!(matches!(
+            read_limited(&b"123456"[..], 5),
+            Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
+        ));
+        // A source with no size to check up front.
+        assert!(matches!(
+            read_limited(std::io::repeat(0), 1024),
+            Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
+        ));
     }
 
     #[test]

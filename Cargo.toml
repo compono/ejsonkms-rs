@@ -1,7 +1,8 @@
 [package]
 name = "ejsonkms"
 version = "2.0.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.99.1"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using EJSON & AWS KMS"
 license = "MIT"
@@ -20,7 +21,7 @@ ejson = "2.0"
 # modern hyper 1.x client is used.
 aws-config = "1"
 aws-sdk-kms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }

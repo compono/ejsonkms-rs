@@ -2,7 +2,7 @@
 #![allow(clippy::print_stderr)]
 
 use std::path::PathBuf;
-use std::process::exit;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
@@ -94,8 +94,7 @@ impl log::Log for StderrLogger {
     fn flush(&self) {}
 }
 
-#[tokio::main]
-async fn main() {
+fn main() -> ExitCode {
     // Cannot fail: no other logger has been installed yet.
     if log::set_logger(&StderrLogger).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
@@ -107,57 +106,70 @@ async fn main() {
     // plaintext about to be encrypted (encrypt).
     disable_core_dumps();
 
-    match cli.command {
-        Command::Encrypt { files } => {
-            if let Err(err) = actions::encrypt_action(&files) {
-                eprintln!("Encryption failed: {err}");
-                exit(1);
-            }
-        }
+    // What to print before the error if the command fails.
+    let (failure, result) = match cli.command {
+        Command::Encrypt { files } => ("Encryption failed", actions::encrypt_action(&files)),
         Command::Decrypt {
             out,
             aws_region,
             file,
-        } => {
-            if let Err(err) =
-                actions::decrypt_action(&file, aws_region.as_deref(), out.as_deref()).await
-            {
-                eprintln!("Decryption failed: {err}");
-                exit(1);
-            }
-        }
+        } => (
+            "Decryption failed",
+            block_on(actions::decrypt_action(
+                &file,
+                aws_region.as_deref(),
+                out.as_deref(),
+            )),
+        ),
         Command::Keygen {
             kms_key_id,
             aws_region,
             out,
             show_private_key,
-        } => {
-            if let Err(err) = actions::keygen_action(
+        } => (
+            "Key generation failed",
+            block_on(actions::keygen_action(
                 &kms_key_id,
                 aws_region.as_deref(),
                 out.as_deref(),
                 show_private_key,
-            )
-            .await
-            {
-                eprintln!("Key generation failed: {err}");
-                exit(1);
-            }
-        }
+            )),
+        ),
         Command::Env {
             quiet,
             aws_region,
             file,
-        } => {
-            let mut stdout = std::io::stdout();
-            if let Err(err) =
-                actions::env_action(&file, aws_region.as_deref(), quiet, &mut stdout).await
-            {
-                eprintln!("error: {err}");
-                exit(1);
-            }
+        } => (
+            "error",
+            block_on(actions::env_action(
+                &file,
+                aws_region.as_deref(),
+                quiet,
+                &mut std::io::stdout(),
+            )),
+        ),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{failure}: {err}");
+            ExitCode::FAILURE
         }
     }
+}
+
+/// Run a command that talks to KMS.
+///
+/// Each command makes one KMS request, so a single-threaded runtime is
+/// enough, and `encrypt`, which makes none, starts no runtime at all.
+fn block_on(
+    command: impl Future<Output = Result<(), actions::CliError>>,
+) -> Result<(), actions::CliError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(command)
 }
 
 /// Keep private keys and decrypted secrets out of core dumps.
@@ -168,7 +180,7 @@ async fn main() {
 fn disable_core_dumps() {
     #[cfg(unix)]
     {
-        use rustix::process::{setrlimit, Resource, Rlimit};
+        use rustix::process::{Resource, Rlimit, setrlimit};
         let _ = setrlimit(
             Resource::Core,
             Rlimit {
@@ -182,7 +194,7 @@ fn disable_core_dumps() {
     // attaching with ptrace or reading /proc/<pid>/mem.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        use rustix::process::{set_dumpable_behavior, DumpableBehavior};
+        use rustix::process::{DumpableBehavior, set_dumpable_behavior};
         let _ = set_dumpable_behavior(DumpableBehavior::NotDumpable);
     }
 }
