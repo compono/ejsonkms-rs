@@ -3,28 +3,28 @@
 class Ejsonkms < Formula
   desc "Manage encrypted secrets using EJSON & AWS KMS"
   homepage "https://github.com/runlevel5/ejsonkms-rs"
-  version "2.0.0"
+  version "3.0.0"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-aarch64-apple-darwin.tar.xz"
-      sha256 "9d37bc21248244031fb2482c23d083fba583f8238b552ff0baa8d41af77ef712"
+      sha256 "ada9d74c30cfa1b45e37208ad889683f0f026372d518d7a3b4830632efa7988f"
     end
     on_intel do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-x86_64-apple-darwin.tar.xz"
-      sha256 "7a89cfe853a6b74d56c84b5f02aea84d8ec290006d4d6aca1e925af17b16667b"
+      sha256 "44ef3e3f54da4eea3afa928c7f84a0545e8fd9e9968feebe96150d134cf38c4a"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-aarch64-unknown-linux-gnu.tar.xz"
-      sha256 "fbd4760aa94fa61d9cba0d5a29129443a97c01627722ad85c47a3081d2ac7af2"
+      sha256 "62262b39d5edf403d996a45ff2541cc34be4095814938b1f08e81b1c8972109a"
     end
     on_intel do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-x86_64-unknown-linux-gnu.tar.xz"
-      sha256 "a43afdc22f1d624909d251a7a2a98d4263e11acc2b3f1e974575c2167b1b08d0"
+      sha256 "3ab2ed017ea90981e29831e7d7c70c5ac27013c020b7103fbfcfb020a963a91c"
     end
   end
 
