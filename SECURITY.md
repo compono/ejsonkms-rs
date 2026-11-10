@@ -5,14 +5,15 @@ ahead of other work.
 
 ## Supported versions
 
-Security fixes are made on `main` and released as a new patch or minor
-version. Only the latest release is supported; please upgrade before
-reporting.
+Only the `3.x` series is supported. Security fixes are made on `main` and
+released as a new `3.x` version; `2.x` and `1.x` receive no fixes, so please
+upgrade before reporting (see [UPGRADING.md](UPGRADING.md)).
 
-| Version          | Supported |
-| ---------------- | --------- |
-| latest `2.x`     | ✅        |
-| older releases   | ❌        |
+| Version | Supported |
+| ------- | --------- |
+| `3.x`   | ✅        |
+| `2.x`   | ❌        |
+| `1.x`   | ❌        |
 
 ## Reporting a vulnerability
 
