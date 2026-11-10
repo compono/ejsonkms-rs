@@ -1,3 +1,6 @@
+// The CLI reports errors on stderr.
+#![allow(clippy::print_stderr)]
+
 use std::process::exit;
 
 use clap::{Parser, Subcommand};
@@ -95,10 +98,14 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    // Every command handles secrets: private keys (keygen, decrypt, env) or
+    // plaintext about to be encrypted (encrypt).
+    disable_core_dumps();
+
     match cli.command {
         Command::Encrypt { files } => {
             if let Err(err) = actions::encrypt_action(&files) {
-                eprintln!("Encryption failed: {}", err);
+                eprintln!("Encryption failed: {err}");
                 exit(1);
             }
         }
@@ -108,7 +115,7 @@ async fn main() {
             file,
         } => {
             if let Err(err) = actions::decrypt_action(&file, &aws_region, out.as_deref()).await {
-                eprintln!("Decryption failed: {}", err);
+                eprintln!("Decryption failed: {err}");
                 exit(1);
             }
         }
@@ -119,7 +126,7 @@ async fn main() {
         } => {
             if let Err(err) = actions::keygen_action(&kms_key_id, &aws_region, out.as_deref()).await
             {
-                eprintln!("Key generation failed: {}", err);
+                eprintln!("Key generation failed: {err}");
                 exit(1);
             }
         }
@@ -130,9 +137,36 @@ async fn main() {
         } => {
             let mut stdout = std::io::stdout();
             if let Err(err) = actions::env_action(&file, &aws_region, quiet, &mut stdout).await {
-                eprintln!("error: {}", err);
+                eprintln!("error: {err}");
                 exit(1);
             }
         }
+    }
+}
+
+/// Keep private keys and decrypted secrets out of core dumps.
+///
+/// Zeroizing only wipes the final copy of a buffer, so a crash dump could
+/// still contain key material or plaintext. Best effort: failures are
+/// ignored, since none of this is needed for correctness.
+fn disable_core_dumps() {
+    #[cfg(unix)]
+    {
+        use rustix::process::{setrlimit, Resource, Rlimit};
+        let _ = setrlimit(
+            Resource::Core,
+            Rlimit {
+                current: Some(0),
+                maximum: Some(0),
+            },
+        );
+    }
+
+    // Not dumpable also stops other processes of the same user from
+    // attaching with ptrace or reading /proc/<pid>/mem.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use rustix::process::{set_dumpable_behavior, DumpableBehavior};
+        let _ = set_dumpable_behavior(DumpableBehavior::NotDumpable);
     }
 }

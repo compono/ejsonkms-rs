@@ -4,6 +4,8 @@
 //! The EJSON private key is encrypted with KMS and stored inside the EJSON file as
 //! `_private_key_enc`. Access to decrypt secrets can be controlled with IAM permissions
 //! on the KMS key.
+#![forbid(unsafe_code)]
+
 pub mod actions;
 mod kms;
 
