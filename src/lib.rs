@@ -21,6 +21,7 @@
 
 mod kms;
 
+use std::io::Read;
 use std::path::Path;
 
 use ejson::env::SecretEnvMap;
@@ -305,14 +306,23 @@ pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsErro
         .map_err(EjsonKmsError::from)
 }
 
-/// Read a file, rejecting anything larger than `ejson::MAX_FILE_SIZE` before
-/// loading it into memory.
+/// Read a file, failing once more than `ejson::MAX_FILE_SIZE` bytes have
+/// been read.
+///
+/// The limit is enforced on the bytes actually read rather than on the size
+/// reported beforehand, so a file that grows (or a device or pipe, which
+/// report no size) cannot be buffered without bound.
 pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsError> {
-    let metadata = std::fs::metadata(file_path)?;
-    if metadata.len() > ejson::MAX_FILE_SIZE {
+    read_limited(std::fs::File::open(file_path)?, ejson::MAX_FILE_SIZE)
+}
+
+fn read_limited(reader: impl Read, max_size: u64) -> Result<Vec<u8>, EjsonKmsError> {
+    let mut data = Vec::new();
+    reader.take(max_size + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > max_size {
         return Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge));
     }
-    Ok(std::fs::read(file_path)?)
+    Ok(data)
 }
 
 #[derive(Deserialize)]
@@ -435,6 +445,20 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "!").unwrap_err();
         let err = EjsonKmsError::base64(source.clone());
         assert_eq!(err.to_string(), format!("base64 decode error: {source}"));
+    }
+
+    #[test]
+    fn test_read_limited_enforces_the_limit_on_bytes_read() {
+        assert_eq!(read_limited(&b"12345"[..], 5).unwrap(), b"12345");
+        assert!(matches!(
+            read_limited(&b"123456"[..], 5),
+            Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
+        ));
+        // A source with no size to check up front.
+        assert!(matches!(
+            read_limited(std::io::repeat(0), 1024),
+            Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge))
+        ));
     }
 
     #[test]
