@@ -9,18 +9,20 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use zeroize::Zeroizing;
 
-use crate::EjsonKmsError;
+use crate::{EjsonKmsError, KmsError};
 
 /// Build a KMS client for the given region.
 ///
-/// If `aws_region` is empty, the default region provider chain is used
-/// (`AWS_REGION`, `AWS_DEFAULT_REGION`, profile, etc.).
+/// If `aws_region` is `None` (or empty), the default region provider chain
+/// is used (`AWS_REGION`, `AWS_DEFAULT_REGION`, profile, etc.).
 ///
 /// If the `FAKE_AWSKMS_URL` environment variable is set, the client is pointed
 /// at that endpoint instead (used for testing against a local KMS).
-async fn new_kms_client(aws_region: &str) -> aws_sdk_kms::Client {
+async fn new_kms_client(aws_region: Option<&str>) -> aws_sdk_kms::Client {
     let region_provider = RegionProviderChain::first_try(
-        (!aws_region.is_empty()).then(|| Region::new(aws_region.to_string())),
+        aws_region
+            .filter(|region| !region.is_empty())
+            .map(|region| Region::new(region.to_string())),
     )
     .or_default_provider();
 
@@ -42,7 +44,7 @@ async fn new_kms_client(aws_region: &str) -> aws_sdk_kms::Client {
 /// when dropped.
 pub(crate) async fn decrypt_private_key_with_kms(
     private_key_enc: &str,
-    aws_region: &str,
+    aws_region: Option<&str>,
 ) -> Result<Zeroizing<String>, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
 
@@ -55,27 +57,20 @@ pub(crate) async fn decrypt_private_key_with_kms(
         .ciphertext_blob(Blob::new(encrypted_value))
         .send()
         .await
-        .map_err(|e| {
-            EjsonKmsError::Kms(format!(
-                "unable to decrypt parameter: {}",
-                DisplayErrorContext(&e)
-            ))
-        })?;
+        .map_err(|e| KmsError::Decrypt(DisplayErrorContext(&e).to_string()))?;
 
-    let plaintext = resp
-        .plaintext()
-        .ok_or_else(|| EjsonKmsError::Kms("KMS decrypt returned no plaintext".to_string()))?;
+    let plaintext = resp.plaintext().ok_or(KmsError::NoPlaintext)?;
 
     String::from_utf8(plaintext.as_ref().to_vec())
         .map(Zeroizing::new)
-        .map_err(|_| EjsonKmsError::Kms("KMS decrypted key is not valid UTF-8".to_string()))
+        .map_err(|_| KmsError::KeyNotUtf8.into())
 }
 
 /// Encrypt a private key with KMS and return it base64-encoded.
 pub(crate) async fn encrypt_private_key_with_kms(
     private_key: &str,
     kms_key_id: &str,
-    aws_region: &str,
+    aws_region: Option<&str>,
 ) -> Result<String, EjsonKmsError> {
     let kms_svc = new_kms_client(aws_region).await;
 
@@ -85,16 +80,9 @@ pub(crate) async fn encrypt_private_key_with_kms(
         .plaintext(Blob::new(private_key.as_bytes()))
         .send()
         .await
-        .map_err(|e| {
-            EjsonKmsError::Kms(format!(
-                "unable to encrypt parameter: {}",
-                DisplayErrorContext(&e)
-            ))
-        })?;
+        .map_err(|e| KmsError::Encrypt(DisplayErrorContext(&e).to_string()))?;
 
-    let ciphertext_blob = resp
-        .ciphertext_blob()
-        .ok_or_else(|| EjsonKmsError::Kms("KMS encrypt returned no ciphertext".to_string()))?;
+    let ciphertext_blob = resp.ciphertext_blob().ok_or(KmsError::NoCiphertext)?;
 
     Ok(BASE64.encode(ciphertext_blob.as_ref()))
 }

@@ -4,15 +4,30 @@
 //! The EJSON private key is encrypted with KMS and stored inside the EJSON file as
 //! `_private_key_enc`. Access to decrypt secrets can be controlled with IAM permissions
 //! on the KMS key.
+//!
+//! ```no_run
+//! # async fn example() -> Result<(), ejsonkms::EjsonKmsError> {
+//! // Create a keypair whose private key is wrapped by a KMS key ...
+//! let keys = ejsonkms::keygen("alias/my-key", Some("us-east-1")).await?;
+//! std::fs::write("secrets.ejson", keys.to_document(ejson::FileFormat::Json)?)?;
+//!
+//! // ... and later decrypt the file; `None` uses the default AWS region chain.
+//! let plaintext = ejsonkms::decrypt("secrets.ejson", None).await?;
+//! let environment = ejsonkms::decrypt_env("secrets.ejson", None).await?;
+//! # Ok(())
+//! # }
+//! ```
 #![forbid(unsafe_code)]
 
-pub mod actions;
 mod kms;
 
-use ejson::{FileFormat, KeySource, Scheme};
-use serde::Deserialize;
+use std::path::Path;
+
+use ejson::env::SecretEnvMap;
+use ejson::{FileFormat, GeneratedKeypair, KeySource, Scheme, UnderscorePrefix};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroizing;
 
 pub(crate) use kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms};
 
@@ -45,19 +60,49 @@ pub enum EjsonKmsError {
     #[error("base64 decode error: {0}")]
     Base64(SourceError),
 
-    #[error("{0}")]
-    Kms(String),
+    /// KMS could not encrypt or decrypt the private key.
+    #[error(transparent)]
+    Kms(#[from] KmsError),
 
     #[error(transparent)]
     Ejson(#[from] ejson::EjsonError),
 
-    #[error("{0}")]
-    Env(String),
+    /// The file's `environment` section could not be used, for example
+    /// because a key is not a valid variable name.
+    #[error("could not load environment from file: {0}")]
+    Env(ejson::env::EnvError),
 
     /// A file format this version of ejsonkms doesn't know how to read or
     /// write `_private_key_enc` in.
     #[error("unsupported file format: {0}")]
     UnsupportedFormat(FileFormat),
+}
+
+/// What went wrong talking to KMS.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum KmsError {
+    /// The KMS `Decrypt` call failed; the payload is the AWS SDK's message
+    /// (access denied, unknown key, no credentials, network failure, ...).
+    #[error("unable to decrypt parameter: {0}")]
+    Decrypt(String),
+
+    /// The KMS `Encrypt` call failed; the payload is the AWS SDK's message.
+    #[error("unable to encrypt parameter: {0}")]
+    Encrypt(String),
+
+    /// KMS answered a `Decrypt` call without a plaintext.
+    #[error("KMS decrypt returned no plaintext")]
+    NoPlaintext,
+
+    /// KMS answered an `Encrypt` call without a ciphertext.
+    #[error("KMS encrypt returned no ciphertext")]
+    NoCiphertext,
+
+    /// `_private_key_enc` decrypted to something that is not an ejson
+    /// private key: it is not valid UTF-8.
+    #[error("KMS decrypted key is not valid UTF-8")]
+    KeyNotUtf8,
 }
 
 impl EjsonKmsError {
@@ -111,13 +156,18 @@ impl std::error::Error for SourceError {
 
 /// Keys used in an EjsonKms file.
 ///
-/// Security: all fields are zeroized from memory when the struct is dropped,
-/// and the `Debug` implementation redacts the private key.
-#[derive(Zeroize, ZeroizeOnDrop)]
+/// Security: the private key is zeroized from memory when the struct is
+/// dropped, and the `Debug` implementation redacts it.
+#[non_exhaustive]
 pub struct EjsonKmsKeys {
+    /// The public key, stored in the file as `_public_key`.
     pub public_key: String,
+    /// The private key encrypted with KMS and base64-encoded, stored in the
+    /// file as `_private_key_enc`.
     pub private_key_enc: String,
-    pub private_key: String,
+    /// The unencrypted private key. Nothing needs it once the file is
+    /// written; keep it out of logs.
+    pub private_key: Zeroizing<String>,
 }
 
 impl std::fmt::Debug for EjsonKmsKeys {
@@ -130,21 +180,54 @@ impl std::fmt::Debug for EjsonKmsKeys {
     }
 }
 
+#[derive(Serialize)]
+struct EjsonKmsFile<'a> {
+    #[serde(rename = "_public_key")]
+    public_key: &'a str,
+    #[serde(rename = "_private_key_enc")]
+    private_key_enc: &'a str,
+}
+
+impl EjsonKmsKeys {
+    /// Render a new, empty secrets file holding these keys: `_public_key`
+    /// and the KMS-encrypted `_private_key_enc`, in the given format.
+    ///
+    /// The unencrypted private key is not part of the document.
+    pub fn to_document(&self, format: FileFormat) -> Result<String, EjsonKmsError> {
+        let file = EjsonKmsFile {
+            public_key: &self.public_key,
+            private_key_enc: &self.private_key_enc,
+        };
+        match format {
+            FileFormat::Json => serde_json::to_string_pretty(&file).map_err(EjsonKmsError::json),
+            FileFormat::Yaml => serde_norway::to_string(&file).map_err(EjsonKmsError::yaml),
+            FileFormat::Toml => toml::to_string(&file).map_err(EjsonKmsError::toml),
+            // `FileFormat` may gain formats in a minor release of ejson.
+            other => Err(EjsonKmsError::UnsupportedFormat(other)),
+        }
+    }
+}
+
 /// Generate keys and prepare an EJSON file with them.
 ///
 /// The generated private key is encrypted with the given KMS key.
-pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, EjsonKmsError> {
-    // `keypair.private_key` wipes itself on drop; the copy handed to
-    // `EjsonKmsKeys` is wiped when that struct is dropped.
-    let keypair = ejson::generate_keypair(Scheme::V1);
+pub async fn keygen(
+    kms_key_id: &str,
+    aws_region: Option<&str>,
+) -> Result<EjsonKmsKeys, EjsonKmsError> {
+    let GeneratedKeypair {
+        public_key,
+        private_key,
+        ..
+    } = ejson::generate_keypair(Scheme::V1);
 
     let private_key_enc =
-        encrypt_private_key_with_kms(&keypair.private_key, kms_key_id, aws_region).await?;
+        encrypt_private_key_with_kms(&private_key, kms_key_id, aws_region).await?;
 
     Ok(EjsonKmsKeys {
-        public_key: keypair.public_key.clone(),
+        public_key,
         private_key_enc,
-        private_key: keypair.private_key.to_string(),
+        private_key,
     })
 }
 
@@ -155,7 +238,14 @@ pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, 
 /// - `.ejson` or `.json` -> JSON format
 /// - `.etoml` or `.toml` -> TOML format
 /// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
-pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>, EjsonKmsError> {
+///
+/// The decrypted document is wrapped in [`Zeroizing`], so it is wiped from
+/// memory when dropped.
+pub async fn decrypt(
+    ejson_file_path: impl AsRef<Path>,
+    aws_region: Option<&str>,
+) -> Result<Zeroizing<Vec<u8>>, EjsonKmsError> {
+    let ejson_file_path = ejson_file_path.as_ref();
     let format = detect_format(ejson_file_path)?;
     let data = read_file_checked(ejson_file_path)?;
 
@@ -164,10 +254,10 @@ pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>,
     let kms_decrypted_private_key =
         decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
 
-    let mut output = Vec::new();
+    let mut output = Zeroizing::new(Vec::new());
     ejson::decrypt(
         &data[..],
-        &mut output,
+        &mut *output,
         KeySource::PrivateKey(&kms_decrypted_private_key),
         format,
     )?;
@@ -175,8 +265,41 @@ pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>,
     Ok(output)
 }
 
+/// Decrypt an EJSON/EYAML/ETOML file and return the values under its
+/// `environment` key, obtaining the private key via KMS as [`decrypt`] does.
+///
+/// A file with no `environment` key, or one that is not a map, gives an
+/// empty map rather than an error. Write the values as shell assignments
+/// with [`ejson::env::export`].
+pub async fn decrypt_env(
+    ejson_file_path: impl AsRef<Path>,
+    aws_region: Option<&str>,
+) -> Result<SecretEnvMap, EjsonKmsError> {
+    let ejson_file_path = ejson_file_path.as_ref();
+    let format = detect_format(ejson_file_path)?;
+    let data = read_file_checked(ejson_file_path)?;
+
+    let private_key_enc = extract_private_key_enc(&data, format)?;
+
+    let kms_decrypted_private_key =
+        decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+
+    let content = ejson::decrypt_bytes_typed(
+        &data,
+        KeySource::PrivateKey(&kms_decrypted_private_key),
+        format,
+        UnderscorePrefix::Keep,
+    )?;
+
+    match ejson::env::extract_env(&content) {
+        Ok(values) => Ok(values),
+        Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
+        Err(e) => Err(EjsonKmsError::Env(e)),
+    }
+}
+
 /// Detect the file format from the file extension.
-pub(crate) fn detect_format(file_path: &str) -> Result<FileFormat, EjsonKmsError> {
+pub(crate) fn detect_format(file_path: &Path) -> Result<FileFormat, EjsonKmsError> {
     FileFormat::from_path(file_path)
         .map_err(ejson::EjsonError::from)
         .map_err(EjsonKmsError::from)
@@ -184,7 +307,7 @@ pub(crate) fn detect_format(file_path: &str) -> Result<FileFormat, EjsonKmsError
 
 /// Read a file, rejecting anything larger than `ejson::MAX_FILE_SIZE` before
 /// loading it into memory.
-pub(crate) fn read_file_checked(file_path: &str) -> Result<Vec<u8>, EjsonKmsError> {
+pub(crate) fn read_file_checked(file_path: &Path) -> Result<Vec<u8>, EjsonKmsError> {
     let metadata = std::fs::metadata(file_path)?;
     if metadata.len() > ejson::MAX_FILE_SIZE {
         return Err(EjsonKmsError::Ejson(ejson::EjsonError::FileTooLarge));
@@ -324,7 +447,7 @@ mod tests {
     fn test_ejson_errors_keep_their_message() {
         // ejson 2.0 errors carry no "format error:"-style prefixes, and
         // ejsonkms passes them through unchanged.
-        let err = detect_format("secrets.txt").unwrap_err();
+        let err = detect_format(Path::new("secrets.txt")).unwrap_err();
         assert!(matches!(
             err,
             EjsonKmsError::Ejson(ejson::EjsonError::FileFormat(_))
@@ -334,9 +457,18 @@ mod tests {
 
     #[test]
     fn test_detect_format() {
-        assert_eq!(detect_format("a.ejson").unwrap(), FileFormat::Json);
-        assert_eq!(detect_format("a.eyaml").unwrap(), FileFormat::Yaml);
-        assert_eq!(detect_format("a.etoml").unwrap(), FileFormat::Toml);
-        assert!(detect_format("a.txt").is_err());
+        assert_eq!(
+            detect_format(Path::new("a.ejson")).unwrap(),
+            FileFormat::Json
+        );
+        assert_eq!(
+            detect_format(Path::new("a.eyaml")).unwrap(),
+            FileFormat::Yaml
+        );
+        assert_eq!(
+            detect_format(Path::new("a.etoml")).unwrap(),
+            FileFormat::Toml
+        );
+        assert!(detect_format(Path::new("a.txt")).is_err());
     }
 }
