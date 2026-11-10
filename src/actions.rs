@@ -5,7 +5,7 @@
 
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ejson::FileFormat;
 use ejson::env::{ExportStyle, Shell};
@@ -33,29 +33,26 @@ fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), EjsonKm
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
-    let name = path
-        .file_name()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("{} has no file name", path.display()),
-            )
-        })?
-        .to_string_lossy();
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} has no file name", path.display()),
+        )
+    })?;
 
-    let (temp_path, mut temp) = create_temp_file(parent, &name)?;
+    // `NamedTempFile` is created owner-only and removes itself when dropped,
+    // which covers every early return below.
+    let mut prefix = std::ffi::OsString::from(".");
+    prefix.push(name);
+    prefix.push(".");
+    let mut temp = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
 
-    let result = (|| -> std::io::Result<()> {
-        temp.write_all(data)?;
-        temp.sync_all()?;
-        drop(temp);
-        fs::rename(&temp_path, path)
-    })();
-
-    if let Err(err) = result {
-        let _ = fs::remove_file(&temp_path);
-        return Err(err.into());
-    }
+    temp.write_all(data)?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|e| e.error)?;
 
     // Persist the rename itself. Best effort: not every platform can open or
     // sync a directory.
@@ -65,35 +62,6 @@ fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), EjsonKm
     }
 
     Ok(())
-}
-
-/// Create a new, owner-only temporary file next to the file being written.
-fn create_temp_file(dir: &Path, name: &str) -> std::io::Result<(PathBuf, File)> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-    loop {
-        let unique = format!(
-            ".{name}.ejsonkms-{}-{}.tmp",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let temp_path = dir.join(unique);
-
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-
-        match options.open(&temp_path) {
-            Ok(file) => return Ok((temp_path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
 }
 
 /// (Re-)encrypt one or more EJSON files in place.
