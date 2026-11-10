@@ -106,3 +106,27 @@ ejsonkms keygen --kms-key-id bc436485-5092-42b8-92a3-0aa8b93536dc -o secrets.ejs
 
 When `FAKE_AWSKMS_URL` is set, the KMS client is pointed at that endpoint
 instead of AWS.
+
+## Releasing
+
+Pushing a version bump in `Cargo.toml` to `main` triggers the Release workflow, which builds the
+platform binaries, creates the GitHub release, and publishes the crate to [crates.io](https://crates.io).
+
+The crates.io publish step authenticates with the `CARGO_REGISTRY_TOKEN` repository secret. To keep
+the blast radius of a leaked token small, this token is deliberately short-lived and narrowly scoped,
+so it must be refreshed manually before each release:
+
+1. Create a new API token at <https://crates.io/settings/tokens/new> with:
+   - **Scope**: `publish-update` only
+   - **Expiration**: 7 days
+2. Update the `CARGO_REGISTRY_TOKEN` secret with the new token value, either on
+   [GitHub](https://github.com/runlevel5/ejsonkms-rs/settings/secrets/actions) or via:
+
+   ```
+   gh secret set CARGO_REGISTRY_TOKEN --repo runlevel5/ejsonkms-rs
+   ```
+
+3. Push the release commit (or re-run the failed `Publish to crates.io` job if the token had expired).
+
+This procedure is manual by design: the token expires within 7 days and can only publish updates to
+existing crates, so a compromised secret has limited value.
