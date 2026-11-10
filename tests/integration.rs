@@ -299,7 +299,7 @@ async fn full_roundtrip_with_mock_kms() {
 
     // --- keygen -o writes the format matching the file extension ---
     let keygen_yaml = temp_dir.path().join("keygen.eyaml");
-    ejsonkms::actions::keygen_action(kms_key_id, aws_region, keygen_yaml.to_str())
+    ejsonkms::actions::keygen_action(kms_key_id, aws_region, keygen_yaml.to_str(), false)
         .await
         .expect("keygen to .eyaml should succeed");
     let written: serde_json::Value =
@@ -309,7 +309,7 @@ async fn full_roundtrip_with_mock_kms() {
     assert!(written["_private_key_enc"].is_string());
 
     let keygen_toml = temp_dir.path().join("keygen.etoml");
-    ejsonkms::actions::keygen_action(kms_key_id, aws_region, keygen_toml.to_str())
+    ejsonkms::actions::keygen_action(kms_key_id, aws_region, keygen_toml.to_str(), false)
         .await
         .expect("keygen to .etoml should succeed");
     let written: toml::Value = toml::from_str(&std::fs::read_to_string(&keygen_toml).unwrap())
@@ -319,7 +319,7 @@ async fn full_roundtrip_with_mock_kms() {
 
     // --- keygen -o refuses to overwrite an existing file ---
     let before = std::fs::read(&ejson_path).unwrap();
-    let err = ejsonkms::actions::keygen_action(kms_key_id, aws_region, ejson_path.to_str())
+    let err = ejsonkms::actions::keygen_action(kms_key_id, aws_region, ejson_path.to_str(), false)
         .await
         .expect_err("keygen over an existing file should fail");
     assert!(
@@ -327,4 +327,52 @@ async fn full_roundtrip_with_mock_kms() {
         "unexpected error: {err}"
     );
     assert_eq!(std::fs::read(&ejson_path).unwrap(), before);
+
+    // --- the keygen command prints the private key only when asked ---
+    let run_keygen = |extra: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_ejsonkms"))
+            .args(["keygen", "--kms-key-id", kms_key_id])
+            .args(["--aws-region", aws_region])
+            .args(extra)
+            .output()
+            .expect("run ejsonkms keygen");
+        assert!(output.status.success(), "keygen failed: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    // By default stdout is just the document, so it can be redirected to a file.
+    let stdout = run_keygen(&[]);
+    assert!(!stdout.contains("Private Key"), "{stdout}");
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout).expect("keygen stdout should be the JSON document");
+    assert!(document["_public_key"].is_string());
+    let private_key = BASE64
+        .decode(document["_private_key_enc"].as_str().unwrap())
+        .unwrap();
+    let private_key = String::from_utf8(private_key).unwrap();
+    assert!(!stdout.contains(&private_key), "{stdout}");
+
+    // -o prints nothing at all.
+    let quiet_path = temp_dir.path().join("quiet.ejson");
+    assert_eq!(run_keygen(&["-o", quiet_path.to_str().unwrap()]), "");
+    assert!(quiet_path.exists());
+
+    // --show-private-key keeps the previous output.
+    let stdout = run_keygen(&["--show-private-key"]);
+    let mut lines = stdout.lines();
+    let shown = lines
+        .next()
+        .and_then(|line| line.strip_prefix("Private Key: "))
+        .expect("first line should be the private key");
+    assert_eq!(shown.len(), 64);
+    assert_eq!(lines.next(), Some("EJSON File:"));
+    let document: serde_json::Value =
+        serde_json::from_str(&lines.collect::<Vec<_>>().join("\n")).unwrap();
+    // The mock KMS is an identity transform, so the wrapped key is the key.
+    assert_eq!(
+        BASE64
+            .decode(document["_private_key_enc"].as_str().unwrap())
+            .unwrap(),
+        shown.as_bytes()
+    );
 }

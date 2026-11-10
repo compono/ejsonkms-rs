@@ -49,6 +49,10 @@ enum Command {
         /// write EJSON file to a file rather than stdout
         #[arg(short = 'o', value_name = "FILE")]
         out: Option<String>,
+        /// also print the unencrypted private key (it is not needed to use
+        /// the file: KMS decrypts the copy stored in it)
+        #[arg(long = "show-private-key")]
+        show_private_key: bool,
     },
     /// print shell export statements
     Env {
@@ -123,8 +127,11 @@ async fn main() {
             kms_key_id,
             aws_region,
             out,
+            show_private_key,
         } => {
-            if let Err(err) = actions::keygen_action(&kms_key_id, &aws_region, out.as_deref()).await
+            if let Err(err) =
+                actions::keygen_action(&kms_key_id, &aws_region, out.as_deref(), show_private_key)
+                    .await
             {
                 eprintln!("Key generation failed: {err}");
                 exit(1);
