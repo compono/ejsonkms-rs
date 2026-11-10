@@ -103,7 +103,8 @@ impl MockKms {
     /// Run `ejsonkms` with `args`, expecting success; returns stdout.
     pub fn run_ok(&self, args: &[&str]) -> String {
         let output = self.run(args);
-        assert_eq!(output.code, Some(0), "ejsonkms {args:?}: {output:?}");
+        // Only the exit code and stderr: stdout may be a decrypted document.
+        assert_eq!(output.code, Some(0), "ejsonkms failed: {}", output.stderr);
         output.stdout
     }
 }
