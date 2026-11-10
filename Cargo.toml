@@ -47,6 +47,10 @@ log = "0.4"
 # Secret hygiene
 zeroize = { version = "1.8", features = ["derive"] }
 
+[target.'cfg(unix)'.dependencies]
+# Process hardening (disable core dumps)
+rustix = { version = "1.1", features = ["process"] }
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -57,3 +61,37 @@ path = "src/main.rs"
 [lib]
 name = "ejsonkms"
 path = "src/lib.rs"
+
+# Keep integer overflow checks in release builds of this crate (dependencies
+# keep the default), so an arithmetic bug panics instead of wrapping silently.
+[profile.release.package.ejsonkms]
+overflow-checks = true
+
+[lints.rust]
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+# No panics in library or CLI code; tests are exempt via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+# Printing belongs to the CLI, which allows these explicitly.
+print_stdout = "warn"
+print_stderr = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+cast_lossless = "warn"
+implicit_clone = "warn"
+manual_let_else = "warn"
+needless_raw_string_hashes = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"

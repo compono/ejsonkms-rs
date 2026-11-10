@@ -5,6 +5,9 @@
 //! mirrors what the Go project does with `nsmithuk/local-kms` in docker-compose,
 //! but without requiring docker.
 
+// Test helpers panic on failure by design.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -89,7 +92,7 @@ fn start_mock_kms() -> String {
             std::thread::spawn(|| handle_connection(stream));
         }
     });
-    format!("http://{}", addr)
+    format!("http://{addr}")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -159,6 +162,37 @@ async fn full_roundtrip_with_mock_kms() {
         let mode = std::fs::metadata(&out_path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "decrypted file should be 0600");
     }
+
+    // --- decrypt -o over an existing world-readable file replaces it with
+    // an owner-only one and leaves no temporary file behind ---
+    let existing_path = temp_dir.path().join("existing.json");
+    std::fs::write(&existing_path, "stale").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&existing_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    ejsonkms::actions::decrypt_action(&ejson_path_str, aws_region, existing_path.to_str())
+        .await
+        .expect("decrypt -o over an existing file should succeed");
+    assert!(std::fs::read_to_string(&existing_path)
+        .unwrap()
+        .contains("secret123"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&existing_path)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "replaced file should be 0600");
+    }
+    let leftovers: Vec<_> = std::fs::read_dir(temp_dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
 
     // --- env ---
     let mut output = Vec::new();

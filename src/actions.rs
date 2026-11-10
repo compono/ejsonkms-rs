@@ -1,8 +1,14 @@
 //! CLI actions for the `ejsonkms` binary.
 
+// These are the CLI's commands, so they print their results.
+#![allow(clippy::print_stdout)]
+
+use std::fs::{self, File};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use zeroize::Zeroizing;
 
 use ejson::env::{ExportStyle, SecretEnvMap, Shell};
 use ejson::{FileFormat, KeySource, UnderscorePrefix};
@@ -12,19 +18,82 @@ use crate::{
     read_file_checked, EjsonKmsError,
 };
 
-/// Create (or truncate) a file for writing decrypted secrets.
+/// Write `data` to `path` so that it is readable only by its owner, creating
+/// or atomically replacing the file.
 ///
-/// On Unix the file is created with `0600` permissions so plaintext secrets
-/// are not readable by other users.
-fn create_secret_file(path: &str) -> Result<std::fs::File, EjsonKmsError> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+/// The data goes to a new owner-only (`0600` on Unix) temporary file in the
+/// same directory, which is synced and then renamed over `path`, so `path` is
+/// never left half-written and never briefly has looser permissions (an
+/// existing file's permissions are not reused). If anything fails, the
+/// temporary file is removed so no partial copy of `data` is left on disk.
+///
+/// On non-Unix platforms the file gets the directory's default permissions.
+fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), EjsonKmsError> {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let name = path
+        .file_name()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{} has no file name", path.display()),
+            )
+        })?
+        .to_string_lossy();
+
+    let (temp_path, mut temp) = create_temp_file(parent, &name)?;
+
+    let result = (|| -> std::io::Result<()> {
+        temp.write_all(data)?;
+        temp.sync_all()?;
+        drop(temp);
+        fs::rename(&temp_path, path)
+    })();
+
+    if let Err(err) = result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err.into());
     }
-    Ok(options.open(path)?)
+
+    // Persist the rename itself. Best effort: not every platform can open or
+    // sync a directory.
+    #[cfg(unix)]
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
+
+    Ok(())
+}
+
+/// Create a new, owner-only temporary file next to the file being written.
+fn create_temp_file(dir: &Path, name: &str) -> std::io::Result<(PathBuf, File)> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    loop {
+        let unique = format!(
+            ".{name}.ejsonkms-{}-{}.tmp",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let temp_path = dir.join(unique);
+
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        match options.open(&temp_path) {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// (Re-)encrypt one or more EJSON files in place.
@@ -36,7 +105,7 @@ pub fn encrypt_action(file_paths: &[String]) -> Result<(), EjsonKmsError> {
     }
     for file_path in file_paths {
         let n = ejson::encrypt_file_in_place(file_path)?;
-        println!("Wrote {} bytes to {}.", n, file_path);
+        println!("Wrote {n} bytes to {file_path}.");
     }
     Ok(())
 }
@@ -47,13 +116,11 @@ pub async fn decrypt_action(
     aws_region: &str,
     out_file: Option<&str>,
 ) -> Result<(), EjsonKmsError> {
-    let decrypted = decrypt(ejson_file_path, aws_region).await?;
+    // Wipe the plaintext from memory once it has been written out.
+    let decrypted = Zeroizing::new(decrypt(ejson_file_path, aws_region).await?);
 
     match out_file {
-        Some(path) => {
-            let mut target = create_secret_file(path)?;
-            target.write_all(&decrypted)?;
-        }
+        Some(path) => write_private_file_atomically(Path::new(path), &decrypted)?,
         None => {
             std::io::stdout().write_all(&decrypted)?;
         }
@@ -102,7 +169,7 @@ pub async fn keygen_action(
     println!("Private Key: {}", ejson_kms_keys.private_key);
     match out_file {
         Some(path) => {
-            let mut target = std::fs::File::create(path)?;
+            let mut target = File::create(path)?;
             target.write_all(ejson_file.as_bytes())?;
         }
         None => {
@@ -152,8 +219,7 @@ pub async fn env_action<W: Write>(
         Err(e) if e.is_missing_environment() => SecretEnvMap::new(),
         Err(e) => {
             return Err(EjsonKmsError::Env(format!(
-                "could not load environment from file: {}",
-                e
+                "could not load environment from file: {e}"
             )))
         }
     };
