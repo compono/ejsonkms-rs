@@ -21,10 +21,6 @@ ejson = "2.0"
 # modern hyper 1.x client is used.
 aws-config = "1"
 aws-sdk-kms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
-tokio = { version = "1", features = ["rt"] }
-
-# CLI
-clap = { version = "4", features = ["derive", "env"] }
 
 # JSON
 serde = { version = "1", features = ["derive"] }
@@ -42,22 +38,42 @@ base64 = "0.23"
 # Error handling
 thiserror = "2"
 
-# Warnings from the ejson library (printed to stderr by the CLI)
-log = "0.4"
-
 # Secret hygiene
 zeroize = "1.8"
 
+# Only the command-line tool needs the rest (the `cli` feature).
+clap = { version = "4", features = ["derive", "env"], optional = true }
+# Warnings from the ejson library, printed to stderr
+log = { version = "0.4", optional = true }
 # Atomic, owner-only output files
-tempfile = "3"
+tempfile = { version = "3", optional = true }
+# The runtime the commands run on
+tokio = { version = "1", features = ["rt"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Process hardening (disable core dumps)
-rustix = { version = "1.1", features = ["process"] }
+rustix = { version = "1.1", features = ["process"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt"] }
+
+[features]
+default = ["cli"]
+# The `ejsonkms` command-line tool. Library users can turn it off with
+# `default-features = false` to avoid building its dependencies.
+cli = ["dep:clap", "dep:log", "dep:rustix", "dep:tempfile", "dep:tokio"]
 
 [[bin]]
 name = "ejsonkms"
 path = "src/main.rs"
+required-features = ["cli"]
+
+# Runs the compiled binary.
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+required-features = ["cli"]
 
 [lib]
 name = "ejsonkms"

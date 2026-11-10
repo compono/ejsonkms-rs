@@ -1,6 +1,6 @@
 //! Tests of the library API against the mock KMS.
 //!
-//! The AWS SDK takes its endpoint and credentials from the process
+//! The AWS SDK takes its credentials from the process
 //! environment, so everything lives in one test: it sets the environment
 //! once, before any other thread could be reading it.
 
@@ -11,7 +11,7 @@ mod common;
 
 use common::{AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
 use ejson::{FileFormat, Scheme};
-use ejsonkms::{EjsonKmsError, KeygenOptions, KmsError};
+use ejsonkms::{Client, Error, KeyBinding, KeygenOptions, KmsError};
 use serde_json::json;
 
 #[test]
@@ -22,7 +22,6 @@ fn library_api_with_mock_kms() {
     // threads at this point are the mock's, which never read the
     // environment. The runtime and the SDK start afterwards.
     unsafe {
-        std::env::set_var("AWS_ENDPOINT_URL_KMS", &kms.url);
         std::env::set_var("AWS_ACCESS_KEY_ID", "123");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "xyz");
         std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
@@ -36,10 +35,17 @@ fn library_api_with_mock_kms() {
 }
 
 async fn library_api(kms: &MockKms) {
-    let region = Some(AWS_REGION);
+    // The endpoint and region are set on the client; only the credentials
+    // come from the environment.
+    let client = Client::builder()
+        .region(AWS_REGION)
+        .endpoint_url(&kms.url)
+        .build()
+        .await;
 
     // --- keygen ---
-    let keys = ejsonkms::keygen(KMS_KEY_ID, region, &KeygenOptions::default())
+    let keys = client
+        .keygen(KMS_KEY_ID, &KeygenOptions::default())
         .await
         .expect("keygen should succeed");
     assert_eq!(keys.scheme, Scheme::V1);
@@ -85,14 +91,16 @@ async fn library_api(kms: &MockKms) {
             .contains("secret123")
     );
 
-    let decrypted = ejsonkms::decrypt(&secrets, region)
+    let decrypted = client
+        .decrypt(&secrets)
         .await
         .expect("decrypt should succeed");
     let decrypted: serde_json::Value = serde_json::from_slice(&decrypted).unwrap();
     assert_eq!(decrypted["environment"]["my_secret"], "secret123");
 
     // --- decrypt_env ---
-    let environment = ejsonkms::decrypt_env(&secrets, region)
+    let environment = client
+        .decrypt_env(&secrets)
         .await
         .expect("decrypt_env should succeed");
     let mut exported = Vec::new();
@@ -109,13 +117,10 @@ async fn library_api(kms: &MockKms) {
     );
 
     // --- a v2 (post-quantum hybrid) keypair works the same way ---
-    let v2_keys = ejsonkms::keygen(
-        KMS_KEY_ID,
-        region,
-        &KeygenOptions::default().scheme(Scheme::V2),
-    )
-    .await
-    .expect("v2 keygen should succeed");
+    let v2_keys = client
+        .keygen(KMS_KEY_ID, &KeygenOptions::default().scheme(Scheme::V2))
+        .await
+        .expect("v2 keygen should succeed");
     assert_eq!(v2_keys.scheme, Scheme::V2);
     assert_ne!(v2_keys.public_key.len(), 64);
 
@@ -128,9 +133,41 @@ async fn library_api(kms: &MockKms) {
     let encrypted = std::fs::read_to_string(&v2_secrets).unwrap();
     assert!(encrypted.contains("EJ[2:"), "{encrypted}");
 
-    let decrypted = ejsonkms::decrypt(&v2_secrets, region)
+    let decrypted = client
+        .decrypt(&v2_secrets)
         .await
         .expect("v2 decrypt should succeed");
+    let decrypted: serde_json::Value = serde_json::from_slice(&decrypted).unwrap();
+    assert_eq!(decrypted["environment"]["my_secret"], "secret123");
+
+    // --- a key bound to its public key ---
+    assert_eq!(keys.binding, KeyBinding::Unbound);
+    let bound_keys = client
+        .keygen(
+            KMS_KEY_ID,
+            &KeygenOptions::default().binding(KeyBinding::PublicKey),
+        )
+        .await
+        .expect("bound keygen should succeed");
+    assert_eq!(bound_keys.binding, KeyBinding::PublicKey);
+    let (_, context) = common::unwrap(&bound_keys.private_key_enc);
+    assert_eq!(
+        context,
+        json!({ "ejsonkms_public_key": bound_keys.public_key })
+    );
+
+    let bound_secrets = dir.path().join("bound.ejson");
+    let mut document: serde_json::Value =
+        serde_json::from_str(&bound_keys.to_document(FileFormat::Json).unwrap()).unwrap();
+    assert_eq!(document["_kms_encryption_context"], "public_key");
+    document["environment"] = json!({ "my_secret": "secret123" });
+    std::fs::write(&bound_secrets, document.to_string()).unwrap();
+    ejson::encrypt_file_in_place(&bound_secrets).unwrap();
+
+    let decrypted = client
+        .decrypt(&bound_secrets)
+        .await
+        .expect("bound decrypt should succeed");
     let decrypted: serde_json::Value = serde_json::from_slice(&decrypted).unwrap();
     assert_eq!(decrypted["environment"]["my_secret"], "secret123");
 
@@ -138,20 +175,19 @@ async fn library_api(kms: &MockKms) {
 
     // No `_private_key_enc`: fails before touching KMS.
     let requests = kms.requests().len();
-    let err = ejsonkms::decrypt("testdata/test_no_private_key.ejson", region)
+    let err = client
+        .decrypt("testdata/test_no_private_key.ejson")
         .await
         .expect_err("decrypt should fail without _private_key_enc");
-    assert!(
-        matches!(err, EjsonKmsError::MissingPrivateKeyEnc),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::MissingPrivateKeyEnc), "{err:?}");
 
     // `_private_key_enc` that is not base64 never reaches KMS either.
     let bad_base64 = write("bad_base64.ejson", "!!!", json!({}));
-    let err = ejsonkms::decrypt(&bad_base64, region)
+    let err = client
+        .decrypt(&bad_base64)
         .await
         .expect_err("decrypt should fail on invalid base64");
-    assert!(matches!(err, EjsonKmsError::Base64(_)), "{err:?}");
+    assert!(matches!(err, Error::Base64(_)), "{err:?}");
     assert_eq!(kms.requests().len(), requests);
 
     // KMS refuses to decrypt.
@@ -160,20 +196,32 @@ async fn library_api(kms: &MockKms) {
         &common::wrap(DENIED_PLAINTEXT, &json!({})),
         json!({}),
     );
-    let err = ejsonkms::decrypt(&denied, region)
+    let err = client
+        .decrypt(&denied)
         .await
         .expect_err("decrypt should fail when KMS refuses");
     assert!(
-        matches!(&err, EjsonKmsError::Kms(KmsError::Decrypt(message)) if message.contains("AccessDeniedException")),
+        matches!(&err, Error::Kms(KmsError::Decrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
         "{err:?}"
     );
 
+    // The SDK's own error is still reachable for callers who want it.
+    let Error::Kms(KmsError::Decrypt(cause)) = &err else {
+        unreachable!()
+    };
+    assert!(std::error::Error::source(cause).is_some());
+    assert!(
+        err.to_string().starts_with("unable to decrypt parameter: "),
+        "{err}"
+    );
+
     // KMS refuses to encrypt.
-    let err = ejsonkms::keygen(DENIED_KEY_ID, region, &KeygenOptions::default())
+    let err = client
+        .keygen(DENIED_KEY_ID, &KeygenOptions::default())
         .await
         .expect_err("keygen should fail when KMS refuses");
     assert!(
-        matches!(&err, EjsonKmsError::Kms(KmsError::Encrypt(message)) if message.contains("AccessDeniedException")),
+        matches!(&err, Error::Kms(KmsError::Encrypt(cause)) if cause.to_string().contains("AccessDeniedException")),
         "{err:?}"
     );
 
@@ -183,13 +231,11 @@ async fn library_api(kms: &MockKms) {
         &common::wrap(&[0xff, 0xfe], &json!({})),
         json!({}),
     );
-    let err = ejsonkms::decrypt(&not_utf8, region)
+    let err = client
+        .decrypt(&not_utf8)
         .await
         .expect_err("decrypt should fail on a non-UTF-8 key");
-    assert!(
-        matches!(err, EjsonKmsError::Kms(KmsError::KeyNotUtf8)),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::Kms(KmsError::KeyNotUtf8)), "{err:?}");
     assert_eq!(err.to_string(), "KMS decrypted key is not valid UTF-8");
 
     // A wrapped key that is text but not an ejson private key.
@@ -198,10 +244,11 @@ async fn library_api(kms: &MockKms) {
         &common::wrap(b"not a key", &json!({})),
         json!({ "my_secret": "secret123" }),
     );
-    let err = ejsonkms::decrypt(&not_a_key, region)
+    let err = client
+        .decrypt(&not_a_key)
         .await
         .expect_err("decrypt should fail on a malformed key");
-    assert!(matches!(err, EjsonKmsError::Ejson(_)), "{err:?}");
+    assert!(matches!(err, Error::Ejson(_)), "{err:?}");
 
     // An environment key that is not a valid variable name.
     let bad_env = write(
@@ -209,14 +256,12 @@ async fn library_api(kms: &MockKms) {
         &keys.private_key_enc,
         json!({ "not valid": "x" }),
     );
-    let err = ejsonkms::decrypt_env(&bad_env, region)
+    let err = client
+        .decrypt_env(&bad_env)
         .await
         .expect_err("decrypt_env should reject an invalid variable name");
     assert!(
-        matches!(
-            err,
-            EjsonKmsError::Env(ejson::env::EnvError::InvalidIdentifier(_))
-        ),
+        matches!(err, Error::Env(ejson::env::EnvError::InvalidIdentifier(_))),
         "{err:?}"
     );
 }

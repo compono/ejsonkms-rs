@@ -1,10 +1,9 @@
-//! Generating a keypair whose private key is wrapped by KMS.
+//! A keypair whose private key is wrapped by KMS, and how to generate one.
 
-use ejson::{FileFormat, GeneratedKeypair, Scheme};
+use ejson::{FileFormat, Scheme};
 use zeroize::Zeroizing;
 
-use crate::kms::encrypt_private_key_with_kms;
-use crate::{EjsonKmsError, document};
+use crate::{Result, document};
 
 /// Keys used in an EjsonKms file.
 ///
@@ -23,8 +22,8 @@ pub struct EjsonKmsKeys {
     /// The scheme the keypair is for.
     pub scheme: Scheme,
     /// Whether `private_key_enc` is bound to `public_key` through the KMS
-    /// encryption context (see [`KeygenOptions::bind_public_key`]).
-    pub bound_to_public_key: bool,
+    /// encryption context.
+    pub binding: KeyBinding,
 }
 
 impl std::fmt::Debug for EjsonKmsKeys {
@@ -34,7 +33,7 @@ impl std::fmt::Debug for EjsonKmsKeys {
             .field("private_key_enc", &self.private_key_enc)
             .field("private_key", &"[REDACTED]")
             .field("scheme", &self.scheme)
-            .field("bound_to_public_key", &self.bound_to_public_key)
+            .field("binding", &self.binding)
             .finish()
     }
 }
@@ -45,17 +44,40 @@ impl EjsonKmsKeys {
     /// `_kms_encryption_context` when the key is bound to the public key.
     ///
     /// The unencrypted private key is not part of the document.
-    pub fn to_document(&self, format: FileFormat) -> Result<String, EjsonKmsError> {
+    pub fn to_document(&self, format: FileFormat) -> Result<String> {
         document::render(
             &self.public_key,
             &self.private_key_enc,
-            self.bound_to_public_key,
+            self.binding,
             format,
         )
     }
 }
 
-/// How [`keygen`] should generate a keypair.
+/// What a KMS-encrypted private key is bound to, through the KMS
+/// [encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/encrypt_context.html).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum KeyBinding {
+    /// Nothing: KMS decrypts the private key for anyone allowed to use the
+    /// KMS key, whichever file it is in. This is what every version of
+    /// ejsonkms and the Go tool can read, and the default.
+    #[default]
+    Unbound,
+    /// The file's public key, using the encryption context
+    /// `ejsonkms_public_key = <public key>`.
+    ///
+    /// KMS then only decrypts the private key for a file that still has the
+    /// same `_public_key`, so the wrapped key cannot be reused in another
+    /// file, and IAM policies and CloudTrail can refer to the context. The
+    /// file records this as `"_kms_encryption_context": "public_key"`.
+    ///
+    /// ejsonkms before 3.0 and the Go tool cannot decrypt a file created
+    /// this way.
+    PublicKey,
+}
+
+/// How [`Client::keygen`](crate::Client::keygen) should generate a keypair.
 ///
 /// The default is a `v1` keypair, which every version of ejson and ejsonkms
 /// (including the Go tools) can use.
@@ -66,71 +88,26 @@ impl EjsonKmsKeys {
 /// let options = KeygenOptions::default().scheme(ejson::Scheme::V2);
 /// ```
 #[derive(Debug, Clone, Default)]
-#[non_exhaustive]
 pub struct KeygenOptions {
-    /// The key scheme: [`Scheme::V1`] (NaCl box, the default) or
-    /// [`Scheme::V2`] (hybrid X25519 + ML-KEM-768, post-quantum). The Go
-    /// tools cannot read `v2` files.
-    pub scheme: Scheme,
-    /// Bind the KMS-encrypted private key to the public key, using the KMS
-    /// encryption context `ejsonkms_public_key = <public key>`.
-    ///
-    /// KMS then only decrypts the private key for a file that still has the
-    /// same `_public_key`, so the wrapped key cannot be reused in another
-    /// file, and IAM policies and CloudTrail can refer to the context. The
-    /// file records this as `"_kms_encryption_context": "public_key"`.
-    ///
-    /// Off by default: ejsonkms before 3.0 and the Go tool cannot decrypt
-    /// a file created this way.
-    pub bind_public_key: bool,
+    pub(crate) scheme: Scheme,
+    pub(crate) binding: KeyBinding,
 }
 
 impl KeygenOptions {
-    /// Set the key scheme.
+    /// Set the key scheme: [`Scheme::V1`] (NaCl box, the default) or
+    /// [`Scheme::V2`] (hybrid X25519 + ML-KEM-768, post-quantum). The Go
+    /// tools cannot read `v2` files.
     #[must_use]
     pub fn scheme(mut self, scheme: Scheme) -> Self {
         self.scheme = scheme;
         self
     }
 
-    /// Set whether to bind the encrypted private key to the public key; see
-    /// [`bind_public_key`](Self::bind_public_key).
+    /// Set what the KMS-encrypted private key is bound to; see
+    /// [`KeyBinding`]. The default is [`KeyBinding::Unbound`].
     #[must_use]
-    pub fn bind_public_key(mut self, bind: bool) -> Self {
-        self.bind_public_key = bind;
+    pub fn binding(mut self, binding: KeyBinding) -> Self {
+        self.binding = binding;
         self
     }
-}
-
-/// Generate keys and prepare an EJSON file with them.
-///
-/// The generated private key is encrypted with the given KMS key.
-pub async fn keygen(
-    kms_key_id: &str,
-    aws_region: Option<&str>,
-    options: &KeygenOptions,
-) -> Result<EjsonKmsKeys, EjsonKmsError> {
-    let scheme = options.scheme;
-    let GeneratedKeypair {
-        public_key,
-        private_key,
-        ..
-    } = ejson::generate_keypair(scheme);
-
-    let bound_to_public_key = options.bind_public_key;
-    let private_key_enc = encrypt_private_key_with_kms(
-        &private_key,
-        kms_key_id,
-        bound_to_public_key.then_some(public_key.as_str()),
-        aws_region,
-    )
-    .await?;
-
-    Ok(EjsonKmsKeys {
-        public_key,
-        private_key_enc,
-        private_key,
-        scheme,
-        bound_to_public_key,
-    })
 }

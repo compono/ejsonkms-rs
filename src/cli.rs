@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use ejson::Scheme;
-use ejsonkms::KeygenOptions;
+use ejsonkms::{Client, KeyBinding, KeygenOptions};
 
 #[derive(Parser)]
 #[command(
@@ -38,9 +38,14 @@ pub(crate) struct AwsArgs {
 }
 
 impl AwsArgs {
-    /// The region to use, or `None` for the default AWS region chain.
-    pub(crate) fn region(&self) -> Option<&str> {
-        self.aws_region.as_deref()
+    /// A client for the requested region, or for the default AWS region
+    /// chain when none was given.
+    pub(crate) async fn client(&self) -> Client {
+        let mut builder = Client::builder();
+        if let Some(region) = &self.aws_region {
+            builder = builder.region(region);
+        }
+        builder.build().await
     }
 }
 
@@ -96,7 +101,11 @@ impl KeygenArgs {
     pub(crate) fn options(&self) -> KeygenOptions {
         KeygenOptions::default()
             .scheme(if self.pqc { Scheme::V2 } else { self.scheme })
-            .bind_public_key(self.bind_public_key)
+            .binding(if self.bind_public_key {
+                KeyBinding::PublicKey
+            } else {
+                KeyBinding::Unbound
+            })
     }
 }
 

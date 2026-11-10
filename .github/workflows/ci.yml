@@ -70,6 +70,11 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      # The library on its own, as a dependent with `default-features = false`
+      # builds it.
+      - name: Run Clippy (library only)
+        run: cargo clippy --locked --no-default-features --lib --tests -- -D warnings
+
   # Licences, banned/duplicate crates and crate sources. Advisories are
   # covered by the Security audit workflow.
   deny:

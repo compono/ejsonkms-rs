@@ -126,6 +126,21 @@ secret123
 
 Note that only secrets under the "environment" key will be exported using the `env` command.
 
+## Using as a library
+
+The crate is also a library. Turn off the default `cli` feature so the command-line tool's dependencies are
+not built:
+
+```toml
+[dependencies]
+ejsonkms = { version = "3", default-features = false }
+```
+
+```rust
+let client = ejsonkms::Client::new().await;
+let plaintext = client.decrypt("secrets.ejson").await?;
+```
+
 ## Testing
 
 Unit and integration tests run against an in-process mock KMS server, so no

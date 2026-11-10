@@ -1,13 +1,24 @@
 //! The errors ejsonkms reports.
 
+use std::path::PathBuf;
+
 use ejson::FileFormat;
 use thiserror::Error;
 
 /// Errors that can occur during ejsonkms operations.
 #[derive(Error, Debug)]
 #[non_exhaustive]
-pub enum EjsonKmsError {
-    /// A file could not be read or written.
+pub enum Error {
+    /// The secrets file could not be read.
+    #[error("{}: {source}", path.display())]
+    ReadFile {
+        /// The file that was being read.
+        path: PathBuf,
+        /// Why it could not be read.
+        source: std::io::Error,
+    },
+
+    /// Some other input or output failed, for example writing a result.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -19,13 +30,10 @@ pub enum EjsonKmsError {
     #[error("yaml error: {0}")]
     Yaml(SourceError),
 
-    /// The file could not be read or written as TOML.
+    /// The file could not be read or written as TOML (or, being TOML, is not
+    /// valid UTF-8).
     #[error("toml error: {0}")]
     Toml(SourceError),
-
-    /// A TOML file is not valid UTF-8.
-    #[error("utf-8 error: {0}")]
-    Utf8(#[from] std::str::Utf8Error),
 
     /// The file has no `_private_key_enc`, or it is empty, so there is no
     /// key to ask KMS for.
@@ -70,14 +78,17 @@ pub enum EjsonKmsError {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum KmsError {
-    /// The KMS `Decrypt` call failed; the payload is the AWS SDK's message
-    /// (access denied, unknown key, no credentials, network failure, ...).
+    /// The KMS `Decrypt` call failed: access denied, unknown key, a wrong
+    /// encryption context, no credentials, a network failure, and so on.
+    /// The payload displays the AWS SDK's full message, and its
+    /// [source](std::error::Error::source) is the SDK's error.
     #[error("unable to decrypt parameter: {0}")]
-    Decrypt(String),
+    Decrypt(SourceError),
 
-    /// The KMS `Encrypt` call failed; the payload is the AWS SDK's message.
+    /// The KMS `Encrypt` call failed; the payload is as for
+    /// [`Decrypt`](Self::Decrypt).
     #[error("unable to encrypt parameter: {0}")]
-    Encrypt(String),
+    Encrypt(SourceError),
 
     /// KMS answered a `Decrypt` call without a plaintext.
     #[error("KMS decrypt returned no plaintext")]
@@ -93,7 +104,7 @@ pub enum KmsError {
     KeyNotUtf8,
 }
 
-impl EjsonKmsError {
+impl Error {
     pub(crate) fn json(err: serde_json::Error) -> Self {
         Self::Json(SourceError::new(err))
     }
@@ -111,7 +122,8 @@ impl EjsonKmsError {
     }
 }
 
-/// An error from one of the parsers or encoders ejsonkms uses.
+/// An error from one of the crates ejsonkms builds on: a parser, an encoder
+/// or the AWS SDK.
 ///
 /// The concrete type is hidden so that those crates are not part of the
 /// ejsonkms API; upgrading one of them is then not a breaking change here.
@@ -119,7 +131,7 @@ impl EjsonKmsError {
 pub struct SourceError(Box<dyn std::error::Error + Send + Sync + 'static>);
 
 impl SourceError {
-    fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub(crate) fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self(Box::new(err))
     }
 }

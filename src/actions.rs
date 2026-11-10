@@ -10,11 +10,11 @@ use std::path::Path;
 use ejson::FileFormat;
 use ejson::env::{ExportStyle, Shell};
 
-use ejsonkms::EjsonKmsError;
+use ejsonkms::Error;
 
 use crate::cli::{DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs};
 
-/// What a command failed with: an [`EjsonKmsError`], or an ejson error from
+/// What a command failed with: an [`Error`], or an ejson error from
 /// a step that doesn't involve KMS.
 pub(crate) type CliError = Box<dyn std::error::Error>;
 
@@ -28,7 +28,7 @@ pub(crate) type CliError = Box<dyn std::error::Error>;
 /// temporary file is removed so no partial copy of `data` is left on disk.
 ///
 /// On non-Unix platforms the file gets the directory's default permissions.
-fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), EjsonKmsError> {
+fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), Error> {
     let parent = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
@@ -67,7 +67,7 @@ fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), EjsonKm
 /// (Re-)encrypt one or more EJSON files in place.
 pub(crate) fn encrypt(args: &EncryptArgs) -> Result<(), CliError> {
     for file_path in &args.files {
-        let n = ejson::encrypt_file_in_place(file_path).map_err(EjsonKmsError::from)?;
+        let n = ejson::encrypt_file_in_place(file_path).map_err(Error::from)?;
         println!("Wrote {n} bytes to {}.", file_path.display());
     }
     Ok(())
@@ -75,13 +75,13 @@ pub(crate) fn encrypt(args: &EncryptArgs) -> Result<(), CliError> {
 
 /// Decrypt an EJSON file, writing the output to `-o FILE` (or stdout).
 pub(crate) async fn decrypt(args: &DecryptArgs) -> Result<(), CliError> {
-    let decrypted = ejsonkms::decrypt(&args.file, args.aws.region()).await?;
+    let decrypted = args.aws.client().await.decrypt(&args.file).await?;
 
     match &args.out {
         Some(path) => write_private_file_atomically(path, &decrypted)?,
         None => std::io::stdout()
             .write_all(&decrypted)
-            .map_err(EjsonKmsError::from)?,
+            .map_err(Error::from)?,
     }
     Ok(())
 }
@@ -110,11 +110,15 @@ pub(crate) async fn keygen(args: &KeygenArgs) -> Result<(), CliError> {
     if let Some(path) = out_file
         && path.exists()
     {
-        return Err(EjsonKmsError::from(already_exists(path)).into());
+        return Err(Error::from(already_exists(path)).into());
     }
 
-    let ejson_kms_keys =
-        ejsonkms::keygen(&args.kms_key_id, args.aws.region(), &args.options()).await?;
+    let ejson_kms_keys = args
+        .aws
+        .client()
+        .await
+        .keygen(&args.kms_key_id, &args.options())
+        .await?;
 
     let format = out_file
         .and_then(|path| FileFormat::from_path(path).ok())
@@ -133,7 +137,7 @@ pub(crate) async fn keygen(args: &KeygenArgs) -> Result<(), CliError> {
                 _ => e,
             })
             .and_then(|mut target| target.write_all(ejson_file.as_bytes()))
-            .map_err(EjsonKmsError::from)?;
+            .map_err(Error::from)?;
     }
 
     if show_private_key {
@@ -167,7 +171,7 @@ pub(crate) async fn env<W: Write>(args: &EnvArgs, output: &mut W) -> Result<(), 
         ExportStyle::Exported
     };
 
-    let env_values = ejsonkms::decrypt_env(&args.file, args.aws.region()).await?;
+    let env_values = args.aws.client().await.decrypt_env(&args.file).await?;
 
     // POSIX `export KEY='value'` syntax, as before. ejson quotes values so
     // that fish reads them identically.
