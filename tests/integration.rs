@@ -316,4 +316,15 @@ async fn full_roundtrip_with_mock_kms() {
         .expect("keygen output should be valid TOML");
     assert!(written["_public_key"].is_str());
     assert!(written["_private_key_enc"].is_str());
+
+    // --- keygen -o refuses to overwrite an existing file ---
+    let before = std::fs::read(&ejson_path).unwrap();
+    let err = ejsonkms::actions::keygen_action(kms_key_id, aws_region, ejson_path.to_str())
+        .await
+        .expect_err("keygen over an existing file should fail");
+    assert!(
+        err.to_string().contains("already exists"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(std::fs::read(&ejson_path).unwrap(), before);
 }

@@ -15,7 +15,8 @@ extension:
 | YAML   | `.eyaml`, `.eyml`, `.yaml`, `.yml` |
 
 `keygen -o` writes the file in the format matching the output file's extension (JSON when writing to
-stdout or an unrecognized extension).
+stdout or an unrecognized extension). It refuses to overwrite an existing file, since that would discard the
+file's secrets together with their key.
 
 ## Install
 

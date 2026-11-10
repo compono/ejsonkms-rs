@@ -143,11 +143,22 @@ struct EjsonKmsFile {
 ///
 /// The output format follows the extension of `out_file` (`.eyaml` -> YAML,
 /// `.etoml` -> TOML, ...); JSON is used for stdout or unrecognized extensions.
+///
+/// `out_file` must not exist yet: a keygen over a secrets file would discard
+/// its encrypted values along with the only copy of their private key.
 pub async fn keygen_action(
     kms_key_id: &str,
     aws_region: &str,
     out_file: Option<&str>,
 ) -> Result<(), EjsonKmsError> {
+    // Fail before asking KMS for anything; `create_new` below still guards
+    // against the file appearing in the meantime.
+    if let Some(path) = out_file {
+        if Path::new(path).exists() {
+            return Err(already_exists(path).into());
+        }
+    }
+
     let ejson_kms_keys = keygen(kms_key_id, aws_region).await?;
 
     let ejson_kms_file = EjsonKmsFile {
@@ -166,18 +177,33 @@ pub async fn keygen_action(
         other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };
 
+    // Write the file before printing the private key, so a key is never
+    // shown for a file that could not be written.
+    if let Some(path) = out_file {
+        let mut target = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => already_exists(path),
+                _ => e,
+            })?;
+        target.write_all(ejson_file.as_bytes())?;
+    }
+
     println!("Private Key: {}", ejson_kms_keys.private_key);
-    match out_file {
-        Some(path) => {
-            let mut target = File::create(path)?;
-            target.write_all(ejson_file.as_bytes())?;
-        }
-        None => {
-            println!("EJSON File:");
-            std::io::stdout().write_all(ejson_file.as_bytes())?;
-        }
+    if out_file.is_none() {
+        println!("EJSON File:");
+        std::io::stdout().write_all(ejson_file.as_bytes())?;
     }
     Ok(())
+}
+
+fn already_exists(path: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("{path} already exists; refusing to overwrite it"),
+    )
 }
 
 /// Decrypt an EJSON file and write shell export statements for the values
