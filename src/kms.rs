@@ -1,12 +1,12 @@
 //! AWS KMS integration for encrypting/decrypting the EJSON private key.
 
-use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
+use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_kms::config::Region;
 use aws_sdk_kms::error::DisplayErrorContext;
 use aws_sdk_kms::primitives::Blob;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use zeroize::Zeroizing;
 
 use crate::{EjsonKmsError, KmsError};

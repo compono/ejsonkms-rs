@@ -8,7 +8,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{MockKms, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID};
+use common::{DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
 use serde_json::json;
 
 /// A mock KMS, a scratch directory and a keypair generated through the CLI.

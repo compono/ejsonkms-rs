@@ -20,9 +20,9 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use serde_json::{json, Value};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde_json::{Value, json};
 
 pub const KMS_KEY_ID: &str = "bc436485-5092-42b8-92a3-0aa8b93536dc";
 pub const AWS_REGION: &str = "us-east-1";

@@ -9,18 +9,33 @@
 
 mod common;
 
-use common::{MockKms, AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID};
+use common::{AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
 use ejson::FileFormat;
 use ejsonkms::{EjsonKmsError, KmsError};
 use serde_json::json;
 
-#[tokio::test]
-async fn library_api_with_mock_kms() {
+#[test]
+fn library_api_with_mock_kms() {
     let kms = MockKms::start();
-    std::env::set_var("AWS_ENDPOINT_URL_KMS", &kms.url);
-    std::env::set_var("AWS_ACCESS_KEY_ID", "123");
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "xyz");
-    std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+
+    // SAFETY: this is the only test in the binary, and the only other
+    // threads at this point are the mock's, which never read the
+    // environment. The runtime and the SDK start afterwards.
+    unsafe {
+        std::env::set_var("AWS_ENDPOINT_URL_KMS", &kms.url);
+        std::env::set_var("AWS_ACCESS_KEY_ID", "123");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "xyz");
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(library_api(&kms));
+}
+
+async fn library_api(kms: &MockKms) {
     let region = Some(AWS_REGION);
 
     // --- keygen ---
@@ -63,9 +78,11 @@ async fn library_api_with_mock_kms() {
         &keys.private_key_enc,
         json!({ "my_secret": "secret123" }),
     );
-    assert!(!std::fs::read_to_string(&secrets)
-        .unwrap()
-        .contains("secret123"));
+    assert!(
+        !std::fs::read_to_string(&secrets)
+            .unwrap()
+            .contains("secret123")
+    );
 
     let decrypted = ejsonkms::decrypt(&secrets, region)
         .await

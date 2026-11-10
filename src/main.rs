@@ -164,7 +164,7 @@ fn main() -> ExitCode {
 /// Each command makes one KMS request, so a single-threaded runtime is
 /// enough, and `encrypt`, which makes none, starts no runtime at all.
 fn block_on(
-    command: impl std::future::Future<Output = Result<(), actions::CliError>>,
+    command: impl Future<Output = Result<(), actions::CliError>>,
 ) -> Result<(), actions::CliError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -180,7 +180,7 @@ fn block_on(
 fn disable_core_dumps() {
     #[cfg(unix)]
     {
-        use rustix::process::{setrlimit, Resource, Rlimit};
+        use rustix::process::{Resource, Rlimit, setrlimit};
         let _ = setrlimit(
             Resource::Core,
             Rlimit {
@@ -194,7 +194,7 @@ fn disable_core_dumps() {
     // attaching with ptrace or reading /proc/<pid>/mem.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        use rustix::process::{set_dumpable_behavior, DumpableBehavior};
+        use rustix::process::{DumpableBehavior, set_dumpable_behavior};
         let _ = set_dumpable_behavior(DumpableBehavior::NotDumpable);
     }
 }
