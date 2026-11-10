@@ -7,6 +7,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EjsonKmsError {
+    /// A file could not be read or written.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -22,9 +23,12 @@ pub enum EjsonKmsError {
     #[error("toml error: {0}")]
     Toml(SourceError),
 
+    /// A TOML file is not valid UTF-8.
     #[error("utf-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
 
+    /// The file has no `_private_key_enc`, or it is empty, so there is no
+    /// key to ask KMS for.
     #[error("missing _private_key_enc field")]
     MissingPrivateKeyEnc,
 
@@ -36,6 +40,9 @@ pub enum EjsonKmsError {
     #[error(transparent)]
     Kms(#[from] KmsError),
 
+    /// ejson could not encrypt or decrypt the document: an unsupported
+    /// file extension, a file that is too large, a key that does not match,
+    /// a corrupted value, and so on.
     #[error(transparent)]
     Ejson(#[from] ejson::EjsonError),
 

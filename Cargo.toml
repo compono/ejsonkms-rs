@@ -70,6 +70,7 @@ overflow-checks = true
 
 [lints.rust]
 missing_debug_implementations = "warn"
+missing_docs = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
 trivial_numeric_casts = "warn"
 unused_qualifications = "warn"

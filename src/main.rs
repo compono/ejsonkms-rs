@@ -1,3 +1,5 @@
+//! The `ejsonkms` command-line tool.
+
 // The CLI reports errors on stderr.
 #![allow(clippy::print_stderr)]
 
