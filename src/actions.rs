@@ -12,7 +12,7 @@ use ejson::env::{ExportStyle, Shell};
 
 use ejsonkms::Error;
 
-use crate::cli::{DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs};
+use crate::cli::{DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs, RewrapArgs};
 
 /// What a command failed with: an [`Error`], or an ejson error from
 /// a step that doesn't involve KMS.
@@ -176,5 +176,17 @@ pub(crate) async fn env<W: Write>(args: &EnvArgs, output: &mut W) -> Result<(), 
     // POSIX `export KEY='value'` syntax, as before. ejson quotes values so
     // that fish reads them identically.
     ejson::env::export(output, &env_values, Shell::Posix, style)?;
+    Ok(())
+}
+
+/// Re-encrypt the private key of one or more files with another KMS key.
+pub(crate) async fn rewrap(args: &RewrapArgs) -> Result<(), CliError> {
+    let client = args.aws.client().await;
+    for file_path in &args.files {
+        client
+            .rewrap(file_path, &args.kms_key_id, args.binding())
+            .await?;
+        println!("Rewrapped {}.", file_path.display());
+    }
     Ok(())
 }

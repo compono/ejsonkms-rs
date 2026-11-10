@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use ejson::FileFormat;
 use thiserror::Error;
 
+use crate::RewrapError;
+
 /// Errors that can occur during ejsonkms operations.
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -15,6 +17,15 @@ pub enum Error {
         /// The file that was being read.
         path: PathBuf,
         /// Why it could not be read.
+        source: std::io::Error,
+    },
+
+    /// The secrets file could not be written.
+    #[error("{}: {source}", path.display())]
+    WriteFile {
+        /// The file that was being written.
+        path: PathBuf,
+        /// Why it could not be written.
         source: std::io::Error,
     },
 
@@ -67,6 +78,11 @@ pub enum Error {
     /// The file says its key is bound to `_public_key`, but has none.
     #[error("missing _public_key field")]
     MissingPublicKey,
+
+    /// The file's key was re-encrypted, but the file could not be updated
+    /// with it; the file is unchanged.
+    #[error("could not rewrap: {0}")]
+    Rewrap(#[from] RewrapError),
 
     /// A file format this version of ejsonkms doesn't know how to read or
     /// write `_private_key_enc` in.

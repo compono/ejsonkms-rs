@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 
 use crate::document::{detect_format, extract_private_key_enc, read_file_checked};
 use crate::kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms, new_kms_client};
-use crate::{EjsonKmsKeys, Error, KeyBinding, KeygenOptions, Result};
+use crate::{EjsonKmsKeys, Error, KeyBinding, KeygenOptions, Result, RewrapError, rewrap};
 
 /// Generates keypairs and decrypts secrets files, using AWS KMS to wrap and
 /// unwrap the private key.
@@ -123,6 +123,74 @@ impl Client {
             Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
             Err(e) => Err(Error::Env(e)),
         }
+    }
+
+    /// Re-encrypt a file's private key with the KMS key `kms_key_id` and
+    /// write the new `_private_key_enc` back to the file.
+    ///
+    /// Use this to move a secrets file to another KMS key, or, with
+    /// `binding` set to [`KeyBinding::PublicKey`], to bind an existing
+    /// file's key to its public key. `None` keeps the file's current
+    /// binding. A bound key cannot be made unbound.
+    ///
+    /// The keypair itself does not change, so the encrypted values stay as
+    /// they are, and the rest of the file is kept byte for byte. The caller
+    /// needs `kms:Decrypt` on the current key and `kms:Encrypt` on the new
+    /// one. The private key exists in memory only between the two requests
+    /// and is wiped afterwards.
+    ///
+    /// The file is replaced atomically, and only after the edited text has
+    /// been read back and checked; on any error it is left untouched.
+    pub async fn rewrap(
+        &self,
+        ejson_file_path: impl AsRef<Path>,
+        kms_key_id: &str,
+        binding: Option<KeyBinding>,
+    ) -> Result<()> {
+        let path = ejson_file_path.as_ref();
+        let format = detect_format(path)?;
+        let data = read_file_checked(path)?;
+        let current = extract_private_key_enc(&data, format)?;
+
+        let add_binding = match (current.binding, binding) {
+            (KeyBinding::PublicKey, Some(KeyBinding::Unbound)) => {
+                return Err(RewrapError::CannotUnbind.into());
+            }
+            (KeyBinding::Unbound, Some(KeyBinding::PublicKey)) => true,
+            _ => false,
+        };
+        let new_bound_public_key = if add_binding {
+            Some(
+                current
+                    .public_key
+                    .as_deref()
+                    .ok_or(Error::MissingPublicKey)?,
+            )
+        } else {
+            current.bound_public_key.as_deref()
+        };
+
+        let private_key = decrypt_private_key_with_kms(
+            &self.kms,
+            &current.private_key_enc,
+            current.bound_public_key.as_deref(),
+        )
+        .await?;
+        let private_key_enc =
+            encrypt_private_key_with_kms(&self.kms, &private_key, kms_key_id, new_bound_public_key)
+                .await?;
+        drop(private_key);
+
+        let updated = rewrap::rewrite(&data, format, &current, &private_key_enc, add_binding)?;
+
+        // Don't overwrite an edit made while KMS was being called.
+        if read_file_checked(path)? != data {
+            return Err(RewrapError::FileChanged.into());
+        }
+        rewrap::replace_file(path, &updated).map_err(|source| Error::WriteFile {
+            path: path.to_path_buf(),
+            source,
+        })
     }
 
     /// Read `path` and ask KMS to decrypt its `_private_key_enc`.

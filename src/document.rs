@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Error, KeyBinding, Result};
 
 /// The `_kms_encryption_context` value for a key bound to `_public_key`.
-const BOUND_TO_PUBLIC_KEY: &str = "public_key";
+pub(crate) const BOUND_TO_PUBLIC_KEY: &str = "public_key";
 
 /// What a file's `_kms_encryption_context` (or its absence) says the key is
 /// bound to.
@@ -115,6 +115,10 @@ pub(crate) struct WrappedKey {
     pub(crate) private_key_enc: String,
     /// The file's `_public_key`, when the file says the key is bound to it.
     pub(crate) bound_public_key: Option<String>,
+    /// The file's `_public_key`, if it has one.
+    pub(crate) public_key: Option<String>,
+    /// What the file says the key is bound to.
+    pub(crate) binding: KeyBinding,
 }
 
 /// Extract the `_private_key_enc` field, and what it is bound to, from raw
@@ -135,19 +139,18 @@ pub(crate) fn extract_private_key_enc(data: &[u8], format: FileFormat) -> Result
         .filter(|key| !key.is_empty())
         .ok_or(Error::MissingPrivateKeyEnc)?;
 
-    let bound_public_key = match binding_from_marker(fields.encryption_context.as_deref())? {
+    let public_key = fields.public_key.filter(|key| !key.is_empty());
+    let binding = binding_from_marker(fields.encryption_context.as_deref())?;
+    let bound_public_key = match binding {
         KeyBinding::Unbound => None,
-        KeyBinding::PublicKey => Some(
-            fields
-                .public_key
-                .filter(|key| !key.is_empty())
-                .ok_or(Error::MissingPublicKey)?,
-        ),
+        KeyBinding::PublicKey => Some(public_key.clone().ok_or(Error::MissingPublicKey)?),
     };
 
     Ok(WrappedKey {
         private_key_enc,
         bound_public_key,
+        public_key,
+        binding,
     })
 }
 
@@ -263,6 +266,8 @@ mod tests {
             WrappedKey {
                 private_key_enc: "encrypted".to_string(),
                 bound_public_key: None,
+                public_key: Some("abc".to_string()),
+                binding: KeyBinding::Unbound,
             }
         );
 
@@ -272,6 +277,8 @@ mod tests {
             WrappedKey {
                 private_key_enc: "encrypted".to_string(),
                 bound_public_key: Some("abc".to_string()),
+                public_key: Some("abc".to_string()),
+                binding: KeyBinding::PublicKey,
             }
         );
 

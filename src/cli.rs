@@ -27,6 +27,8 @@ pub(crate) enum Command {
     Keygen(KeygenArgs),
     /// print shell export statements
     Env(EnvArgs),
+    /// re-encrypt a file's private key with another KMS key
+    Rewrap(RewrapArgs),
 }
 
 /// Where to find KMS; shared by every command that calls it.
@@ -119,4 +121,28 @@ pub(crate) struct EnvArgs {
     /// EJSON file to read secrets from
     #[arg(value_name = "FILE")]
     pub(crate) file: PathBuf,
+}
+
+#[derive(Args)]
+pub(crate) struct RewrapArgs {
+    /// KMS Key ID to encrypt the private key with from now on
+    #[arg(long = "kms-key-id")]
+    pub(crate) kms_key_id: String,
+    #[command(flatten)]
+    pub(crate) aws: AwsArgs,
+    /// also bind the encrypted private key to the public key with a KMS
+    /// encryption context (not readable by ejsonkms before 3.0 or the
+    /// Go tool); without this the file's current binding is kept
+    #[arg(long = "bind-public-key")]
+    bind_public_key: bool,
+    /// EJSON file(s) to rewrap
+    #[arg(value_name = "FILE", required = true)]
+    pub(crate) files: Vec<PathBuf>,
+}
+
+impl RewrapArgs {
+    /// The binding the flags ask for, or `None` to keep the file's own.
+    pub(crate) fn binding(&self) -> Option<KeyBinding> {
+        self.bind_public_key.then_some(KeyBinding::PublicKey)
+    }
 }

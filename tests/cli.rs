@@ -616,6 +616,118 @@ fn decrypt_rejects_files_it_cannot_use_without_calling_kms() {
 }
 
 #[test]
+fn rewrap_moves_a_file_to_another_kms_key() {
+    let fixture = Fixture::new();
+    let public_key = &fixture.public_key;
+    let private_key_enc = &fixture.private_key_enc;
+    let path = fixture.write(
+        "secrets.eyaml",
+        &format!(
+            "# deploy secrets\n_public_key: \"{public_key}\"\n_private_key_enc: \"{private_key_enc}\" # wrapped by KMS\nenvironment:\n  my_secret: \"secret123\"\n"
+        ),
+    );
+    fixture.kms.run_ok(&["encrypt", &path]);
+    let before = read(&path);
+    assert_eq!(common::key_id_of(private_key_enc), KMS_KEY_ID);
+
+    let stdout = fixture
+        .kms
+        .run_ok(&["rewrap", "--kms-key-id", "alias/other", &path]);
+    assert_eq!(stdout, format!("Rewrapped {path}.\n"));
+
+    // Only the wrapped key changed: same private key, new KMS key.
+    let after = read(&path);
+    let document: serde_json::Value = serde_norway::from_str(&after).unwrap();
+    let rewrapped = document["_private_key_enc"].as_str().unwrap();
+    assert_eq!(after, before.replace(private_key_enc.as_str(), rewrapped));
+    assert_eq!(common::key_id_of(rewrapped), "alias/other");
+    assert_eq!(
+        common::unwrap(rewrapped).0,
+        common::unwrap(private_key_enc).0
+    );
+
+    assert_eq!(
+        fixture.kms.run_ok(&["env", &path]),
+        "export my_secret='secret123'\n"
+    );
+}
+
+#[test]
+fn rewrap_can_bind_an_existing_file_to_its_public_key() {
+    let fixture = Fixture::new();
+    let secrets = fixture.secrets();
+    let before: serde_json::Value = serde_json::from_str(&read(&secrets)).unwrap();
+    assert!(before.get("_kms_encryption_context").is_none());
+
+    fixture.kms.run_ok(&[
+        "rewrap",
+        "--kms-key-id",
+        KMS_KEY_ID,
+        "--bind-public-key",
+        &secrets,
+    ]);
+
+    let after: serde_json::Value = serde_json::from_str(&read(&secrets)).unwrap();
+    assert_eq!(after["_kms_encryption_context"], "public_key");
+    assert_eq!(after["_public_key"], before["_public_key"]);
+    assert_eq!(after["environment"], before["environment"]);
+    let (_, context) = common::unwrap(after["_private_key_enc"].as_str().unwrap());
+    assert_eq!(
+        context,
+        json!({ "ejsonkms_public_key": fixture.public_key })
+    );
+
+    assert_eq!(
+        fixture.kms.run_ok(&["env", &secrets]),
+        "export my_secret='secret123'\n"
+    );
+
+    // A later rewrap without the flag keeps the binding.
+    fixture
+        .kms
+        .run_ok(&["rewrap", "--kms-key-id", "alias/other", &secrets]);
+    let again: serde_json::Value = serde_json::from_str(&read(&secrets)).unwrap();
+    assert_eq!(again["_kms_encryption_context"], "public_key");
+    let (_, context) = common::unwrap(again["_private_key_enc"].as_str().unwrap());
+    assert_eq!(
+        context,
+        json!({ "ejsonkms_public_key": fixture.public_key })
+    );
+    assert_eq!(
+        fixture.kms.run_ok(&["env", &secrets]),
+        "export my_secret='secret123'\n"
+    );
+}
+
+#[test]
+fn rewrap_leaves_the_file_alone_when_kms_refuses() {
+    let fixture = Fixture::new();
+    let secrets = fixture.secrets();
+    let before = read(&secrets);
+
+    let output = fixture
+        .kms
+        .run(&["rewrap", "--kms-key-id", DENIED_KEY_ID, &secrets]);
+    assert_eq!(output.code, Some(1));
+    assert_eq!(output.stdout, "");
+    assert!(
+        output
+            .stderr
+            .starts_with("Rewrap failed: unable to encrypt parameter: "),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(read(&secrets), before);
+
+    let leftovers: Vec<_> = std::fs::read_dir(fixture.dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+}
+
+#[test]
 fn usage_errors_exit_with_2() {
     let kms = MockKms::start();
 
