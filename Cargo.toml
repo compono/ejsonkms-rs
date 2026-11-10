@@ -1,6 +1,6 @@
 [package]
 name = "ejsonkms"
-version = "1.0.6"
+version = "2.0.0"
 edition = "2021"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using EJSON & AWS KMS"
@@ -11,7 +11,7 @@ keywords = ["encryption", "secrets", "json", "kms", "aws"]
 categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
-ejson = "1.0.6"
+ejson = "2.0"
 
 # AWS KMS
 # default-features = false drops aws-sdk-kms's legacy TLS stack (hyper 0.14,
@@ -39,6 +39,9 @@ base64 = "0.22"
 
 # Error handling
 thiserror = "2"
+
+# Warnings from the ejson library (printed to stderr by the CLI)
+log = "0.4"
 
 # Secret hygiene
 zeroize = { version = "1.8", features = ["derive"] }
