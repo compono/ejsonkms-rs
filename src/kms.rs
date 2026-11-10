@@ -9,7 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use zeroize::Zeroizing;
 
-use crate::EjsonKmsError;
+use crate::{EjsonKmsError, KmsError};
 
 /// Build a KMS client for the given region.
 ///
@@ -55,20 +55,13 @@ pub(crate) async fn decrypt_private_key_with_kms(
         .ciphertext_blob(Blob::new(encrypted_value))
         .send()
         .await
-        .map_err(|e| {
-            EjsonKmsError::Kms(format!(
-                "unable to decrypt parameter: {}",
-                DisplayErrorContext(&e)
-            ))
-        })?;
+        .map_err(|e| KmsError::Decrypt(DisplayErrorContext(&e).to_string()))?;
 
-    let plaintext = resp
-        .plaintext()
-        .ok_or_else(|| EjsonKmsError::Kms("KMS decrypt returned no plaintext".to_string()))?;
+    let plaintext = resp.plaintext().ok_or(KmsError::NoPlaintext)?;
 
     String::from_utf8(plaintext.as_ref().to_vec())
         .map(Zeroizing::new)
-        .map_err(|_| EjsonKmsError::Kms("KMS decrypted key is not valid UTF-8".to_string()))
+        .map_err(|_| KmsError::KeyNotUtf8.into())
 }
 
 /// Encrypt a private key with KMS and return it base64-encoded.
@@ -85,16 +78,9 @@ pub(crate) async fn encrypt_private_key_with_kms(
         .plaintext(Blob::new(private_key.as_bytes()))
         .send()
         .await
-        .map_err(|e| {
-            EjsonKmsError::Kms(format!(
-                "unable to encrypt parameter: {}",
-                DisplayErrorContext(&e)
-            ))
-        })?;
+        .map_err(|e| KmsError::Encrypt(DisplayErrorContext(&e).to_string()))?;
 
-    let ciphertext_blob = resp
-        .ciphertext_blob()
-        .ok_or_else(|| EjsonKmsError::Kms("KMS encrypt returned no ciphertext".to_string()))?;
+    let ciphertext_blob = resp.ciphertext_blob().ok_or(KmsError::NoCiphertext)?;
 
     Ok(BASE64.encode(ciphertext_blob.as_ref()))
 }

@@ -13,6 +13,7 @@ use std::net::{TcpListener, TcpStream};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use ejsonkms::{EjsonKmsError, KmsError};
 
 fn handle_connection(mut stream: TcpStream) {
     let mut buf = Vec::new();
@@ -258,6 +259,64 @@ async fn full_roundtrip_with_mock_kms() {
             no_env_path.to_str().unwrap()
         ]),
         ""
+    );
+
+    // --- errors are structured, and the CLI reports them on stderr ---
+    let write_file = |name: &str, private_key_enc: &str, environment: serde_json::Value| {
+        let path = temp_dir.path().join(name);
+        let contents = serde_json::json!({
+            "_public_key": keys.public_key,
+            "_private_key_enc": private_key_enc,
+            "environment": environment,
+        });
+        std::fs::write(&path, serde_json::to_string(&contents).unwrap()).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+
+    // `_private_key_enc` that is not base64 never reaches KMS.
+    let bad_base64 = write_file("bad_base64.ejson", "!!!", serde_json::json!({}));
+    let err = ejsonkms::decrypt(&bad_base64, aws_region)
+        .await
+        .expect_err("decrypt should fail on invalid base64");
+    assert!(matches!(err, EjsonKmsError::Base64(_)), "{err:?}");
+
+    // A wrapped key that decrypts to something that isn't text.
+    let not_utf8 = write_file(
+        "not_utf8.ejson",
+        &BASE64.encode([0xff, 0xfe]),
+        serde_json::json!({}),
+    );
+    let err = ejsonkms::decrypt(&not_utf8, aws_region)
+        .await
+        .expect_err("decrypt should fail on a non-UTF-8 key");
+    assert!(
+        matches!(err, EjsonKmsError::Kms(KmsError::KeyNotUtf8)),
+        "{err:?}"
+    );
+    assert_eq!(err.to_string(), "KMS decrypted key is not valid UTF-8");
+
+    // An environment key that is not a valid variable name.
+    let bad_env = write_file(
+        "bad_env.ejson",
+        &keys.private_key_enc,
+        serde_json::json!({ "not valid": "x" }),
+    );
+    let err = ejsonkms::decrypt_env(&bad_env, aws_region)
+        .await
+        .expect_err("decrypt_env should reject an invalid variable name");
+    assert!(
+        matches!(
+            err,
+            EjsonKmsError::Env(ejson::env::EnvError::InvalidIdentifier(_))
+        ),
+        "{err:?}"
+    );
+    let output = cli(&["env", "--aws-region", aws_region, &bad_env]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: could not load environment from file: invalid identifier as key in environment: \"not valid\"\n"
     );
 
     // --- decrypt a file with no _private_key_enc fails before touching KMS ---

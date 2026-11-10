@@ -45,19 +45,49 @@ pub enum EjsonKmsError {
     #[error("base64 decode error: {0}")]
     Base64(SourceError),
 
-    #[error("{0}")]
-    Kms(String),
+    /// KMS could not encrypt or decrypt the private key.
+    #[error(transparent)]
+    Kms(#[from] KmsError),
 
     #[error(transparent)]
     Ejson(#[from] ejson::EjsonError),
 
-    #[error("{0}")]
-    Env(String),
+    /// The file's `environment` section could not be used, for example
+    /// because a key is not a valid variable name.
+    #[error("could not load environment from file: {0}")]
+    Env(ejson::env::EnvError),
 
     /// A file format this version of ejsonkms doesn't know how to read or
     /// write `_private_key_enc` in.
     #[error("unsupported file format: {0}")]
     UnsupportedFormat(FileFormat),
+}
+
+/// What went wrong talking to KMS.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum KmsError {
+    /// The KMS `Decrypt` call failed; the payload is the AWS SDK's message
+    /// (access denied, unknown key, no credentials, network failure, ...).
+    #[error("unable to decrypt parameter: {0}")]
+    Decrypt(String),
+
+    /// The KMS `Encrypt` call failed; the payload is the AWS SDK's message.
+    #[error("unable to encrypt parameter: {0}")]
+    Encrypt(String),
+
+    /// KMS answered a `Decrypt` call without a plaintext.
+    #[error("KMS decrypt returned no plaintext")]
+    NoPlaintext,
+
+    /// KMS answered an `Encrypt` call without a ciphertext.
+    #[error("KMS encrypt returned no ciphertext")]
+    NoCiphertext,
+
+    /// `_private_key_enc` decrypted to something that is not an ejson
+    /// private key: it is not valid UTF-8.
+    #[error("KMS decrypted key is not valid UTF-8")]
+    KeyNotUtf8,
 }
 
 impl EjsonKmsError {
@@ -244,9 +274,7 @@ pub async fn decrypt_env(
     match ejson::env::extract_env(&content) {
         Ok(values) => Ok(values),
         Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
-        Err(e) => Err(EjsonKmsError::Env(format!(
-            "could not load environment from file: {e}"
-        ))),
+        Err(e) => Err(EjsonKmsError::Env(e)),
     }
 }
 
