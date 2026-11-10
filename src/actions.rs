@@ -4,7 +4,8 @@ use std::io::Write;
 
 use serde::Serialize;
 
-use ejson::FileFormat;
+use ejson::env::{ExportStyle, SecretEnvMap, Shell};
+use ejson::{FileFormat, KeySource, UnderscorePrefix};
 
 use crate::{
     decrypt, decrypt_private_key_with_kms, detect_format, extract_private_key_enc, keygen,
@@ -94,6 +95,8 @@ pub async fn keygen_action(
         FileFormat::Json => serde_json::to_string_pretty(&ejson_kms_file)?,
         FileFormat::Yaml => serde_norway::to_string(&ejson_kms_file)?,
         FileFormat::Toml => toml::to_string(&ejson_kms_file)?,
+        // `FileFormat` may gain formats in a minor release of ejson.
+        other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };
 
     println!("Private Key: {}", ejson_kms_keys.private_key);
@@ -118,10 +121,10 @@ pub async fn env_action<W: Write>(
     quiet: bool,
     output: &mut W,
 ) -> Result<(), EjsonKmsError> {
-    let export_func: ejson::env::ExportFunction = if quiet {
-        ejson::env::export_quiet
+    let style = if quiet {
+        ExportStyle::Unexported
     } else {
-        ejson::env::export_env
+        ExportStyle::Exported
     };
 
     let format = detect_format(ejson_file_path)?;
@@ -135,13 +138,18 @@ pub async fn env_action<W: Write>(
         decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
 
     // Decrypt using the already-read data
-    let content = ejson::decrypt_bytes_typed(&data, "", &kms_decrypted_private_key, format, false)?;
+    let content = ejson::decrypt_bytes_typed(
+        &data,
+        KeySource::PrivateKey(&kms_decrypted_private_key),
+        format,
+        UnderscorePrefix::Keep,
+    )?;
 
     // Extract env values; a missing or invalid "environment" key results in an
     // empty export rather than an error
     let env_values = match ejson::env::extract_env(&content) {
         Ok(values) => values,
-        Err(e) if ejson::env::is_env_error(&e) => ejson::env::SecretEnvMap::new(),
+        Err(e) if e.is_missing_environment() => SecretEnvMap::new(),
         Err(e) => {
             return Err(EjsonKmsError::Env(format!(
                 "could not load environment from file: {}",
@@ -150,5 +158,8 @@ pub async fn env_action<W: Write>(
         }
     };
 
-    export_func(output, &env_values).map_err(|e| EjsonKmsError::Env(e.to_string()))
+    // POSIX `export KEY='value'` syntax, as before. ejson quotes values so
+    // that fish reads them identically.
+    ejson::env::export(output, &env_values, Shell::Posix, style)
+        .map_err(|e| EjsonKmsError::Env(e.to_string()))
 }

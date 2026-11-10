@@ -7,7 +7,7 @@
 pub mod actions;
 mod kms;
 
-use ejson::FileFormat;
+use ejson::{FileFormat, KeySource, Scheme};
 use serde::Deserialize;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -49,6 +49,11 @@ pub enum EjsonKmsError {
 
     #[error("{0}")]
     Env(String),
+
+    /// A file format this version of ejsonkms doesn't know how to read or
+    /// write `_private_key_enc` in.
+    #[error("unsupported file format: {0}")]
+    UnsupportedFormat(FileFormat),
 }
 
 /// Keys used in an EjsonKms file.
@@ -76,15 +81,17 @@ impl std::fmt::Debug for EjsonKmsKeys {
 ///
 /// The generated private key is encrypted with the given KMS key.
 pub async fn keygen(kms_key_id: &str, aws_region: &str) -> Result<EjsonKmsKeys, EjsonKmsError> {
-    let (public_key, private_key) = ejson::generate_keypair()?;
+    // `keypair.private_key` wipes itself on drop; the copy handed to
+    // `EjsonKmsKeys` is wiped when that struct is dropped.
+    let keypair = ejson::generate_keypair(Scheme::V1);
 
     let private_key_enc =
-        encrypt_private_key_with_kms(&private_key, kms_key_id, aws_region).await?;
+        encrypt_private_key_with_kms(&keypair.private_key, kms_key_id, aws_region).await?;
 
     Ok(EjsonKmsKeys {
-        public_key,
+        public_key: keypair.public_key.clone(),
         private_key_enc,
-        private_key,
+        private_key: keypair.private_key.to_string(),
     })
 }
 
@@ -105,11 +112,10 @@ pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>,
         decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
 
     let mut output = Vec::new();
-    ejson::decrypt_with_format(
+    ejson::decrypt(
         &data[..],
         &mut output,
-        "",
-        &kms_decrypted_private_key,
+        KeySource::PrivateKey(&kms_decrypted_private_key),
         format,
     )?;
 
@@ -148,6 +154,8 @@ pub(crate) fn extract_private_key_enc(
         FileFormat::Json => serde_json::from_slice(data)?,
         FileFormat::Yaml => serde_norway::from_slice(data)?,
         FileFormat::Toml => toml::from_str(std::str::from_utf8(data)?)?,
+        // `FileFormat` may gain formats in a minor release of ejson.
+        other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };
 
     match fields.private_key_enc {
@@ -227,6 +235,24 @@ mod tests {
             extract_private_key_enc(&data, FileFormat::Json),
             Err(EjsonKmsError::MissingPrivateKeyEnc)
         ));
+    }
+
+    #[test]
+    fn test_unsupported_format_error_names_the_format() {
+        let err = EjsonKmsError::UnsupportedFormat(FileFormat::Toml);
+        assert_eq!(err.to_string(), "unsupported file format: TOML");
+    }
+
+    #[test]
+    fn test_ejson_errors_keep_their_message() {
+        // ejson 2.0 errors carry no "format error:"-style prefixes, and
+        // ejsonkms passes them through unchanged.
+        let err = detect_format("secrets.txt").unwrap_err();
+        assert!(matches!(
+            err,
+            EjsonKmsError::Ejson(ejson::EjsonError::FileFormat(_))
+        ));
+        assert_eq!(err.to_string(), "unsupported file extension: txt");
     }
 
     #[test]

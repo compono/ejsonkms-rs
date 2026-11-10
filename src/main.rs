@@ -61,8 +61,38 @@ enum Command {
     },
 }
 
+/// Prints warnings from the ejson library to stderr as `ejsonkms: warning: ...`.
+///
+/// ejson reports non-fatal problems (for example YAML numbers it left
+/// unencrypted, or control characters dropped from an exported value) through
+/// the `log` crate instead of writing to stderr itself.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            let level = match record.level() {
+                log::Level::Error => "error",
+                _ => "warning",
+            };
+            eprintln!("ejsonkms: {level}: {}", record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 #[tokio::main]
 async fn main() {
+    // Cannot fail: no other logger has been installed yet.
+    if log::set_logger(&StderrLogger).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+
     let cli = Cli::parse();
 
     match cli.command {
