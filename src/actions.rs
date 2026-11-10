@@ -75,7 +75,7 @@ pub(crate) fn encrypt(args: &EncryptArgs) -> Result<(), CliError> {
 
 /// Decrypt an EJSON file, writing the output to `-o FILE` (or stdout).
 pub(crate) async fn decrypt(args: &DecryptArgs) -> Result<(), CliError> {
-    let decrypted = ejsonkms::decrypt(&args.file, args.aws.region()).await?;
+    let decrypted = args.aws.client().await.decrypt(&args.file).await?;
 
     match &args.out {
         Some(path) => write_private_file_atomically(path, &decrypted)?,
@@ -113,8 +113,12 @@ pub(crate) async fn keygen(args: &KeygenArgs) -> Result<(), CliError> {
         return Err(EjsonKmsError::from(already_exists(path)).into());
     }
 
-    let ejson_kms_keys =
-        ejsonkms::keygen(&args.kms_key_id, args.aws.region(), &args.options()).await?;
+    let ejson_kms_keys = args
+        .aws
+        .client()
+        .await
+        .keygen(&args.kms_key_id, &args.options())
+        .await?;
 
     let format = out_file
         .and_then(|path| FileFormat::from_path(path).ok())
@@ -167,7 +171,7 @@ pub(crate) async fn env<W: Write>(args: &EnvArgs, output: &mut W) -> Result<(), 
         ExportStyle::Exported
     };
 
-    let env_values = ejsonkms::decrypt_env(&args.file, args.aws.region()).await?;
+    let env_values = args.aws.client().await.decrypt_env(&args.file).await?;
 
     // POSIX `export KEY='value'` syntax, as before. ejson quotes values so
     // that fish reads them identically.

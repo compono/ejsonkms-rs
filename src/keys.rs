@@ -1,9 +1,8 @@
-//! Generating a keypair whose private key is wrapped by KMS.
+//! A keypair whose private key is wrapped by KMS, and how to generate one.
 
-use ejson::{FileFormat, GeneratedKeypair, Scheme};
+use ejson::{FileFormat, Scheme};
 use zeroize::Zeroizing;
 
-use crate::kms::encrypt_private_key_with_kms;
 use crate::{EjsonKmsError, document};
 
 /// Keys used in an EjsonKms file.
@@ -55,7 +54,7 @@ impl EjsonKmsKeys {
     }
 }
 
-/// How [`keygen`] should generate a keypair.
+/// How [`Client::keygen`](crate::Client::keygen) should generate a keypair.
 ///
 /// The default is a `v1` keypair, which every version of ejson and ejsonkms
 /// (including the Go tools) can use.
@@ -100,37 +99,4 @@ impl KeygenOptions {
         self.bind_public_key = bind;
         self
     }
-}
-
-/// Generate keys and prepare an EJSON file with them.
-///
-/// The generated private key is encrypted with the given KMS key.
-pub async fn keygen(
-    kms_key_id: &str,
-    aws_region: Option<&str>,
-    options: &KeygenOptions,
-) -> Result<EjsonKmsKeys, EjsonKmsError> {
-    let scheme = options.scheme;
-    let GeneratedKeypair {
-        public_key,
-        private_key,
-        ..
-    } = ejson::generate_keypair(scheme);
-
-    let bound_to_public_key = options.bind_public_key;
-    let private_key_enc = encrypt_private_key_with_kms(
-        &private_key,
-        kms_key_id,
-        bound_to_public_key.then_some(public_key.as_str()),
-        aws_region,
-    )
-    .await?;
-
-    Ok(EjsonKmsKeys {
-        public_key,
-        private_key_enc,
-        private_key,
-        scheme,
-        bound_to_public_key,
-    })
 }
