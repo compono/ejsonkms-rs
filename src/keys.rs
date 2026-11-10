@@ -88,25 +88,23 @@ pub enum KeyBinding {
 /// let options = KeygenOptions::default().scheme(ejson::Scheme::V2);
 /// ```
 #[derive(Debug, Clone, Default)]
-#[non_exhaustive]
 pub struct KeygenOptions {
-    /// The key scheme: [`Scheme::V1`] (NaCl box, the default) or
-    /// [`Scheme::V2`] (hybrid X25519 + ML-KEM-768, post-quantum). The Go
-    /// tools cannot read `v2` files.
-    pub scheme: Scheme,
-    /// What the KMS-encrypted private key is bound to; see [`KeyBinding`].
-    pub binding: KeyBinding,
+    pub(crate) scheme: Scheme,
+    pub(crate) binding: KeyBinding,
 }
 
 impl KeygenOptions {
-    /// Set the key scheme.
+    /// Set the key scheme: [`Scheme::V1`] (NaCl box, the default) or
+    /// [`Scheme::V2`] (hybrid X25519 + ML-KEM-768, post-quantum). The Go
+    /// tools cannot read `v2` files.
     #[must_use]
     pub fn scheme(mut self, scheme: Scheme) -> Self {
         self.scheme = scheme;
         self
     }
 
-    /// Set what the encrypted private key is bound to.
+    /// Set what the KMS-encrypted private key is bound to; see
+    /// [`KeyBinding`]. The default is [`KeyBinding::Unbound`].
     #[must_use]
     pub fn binding(mut self, binding: KeyBinding) -> Self {
         self.binding = binding;
