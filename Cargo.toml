@@ -20,7 +20,7 @@ ejson = "2.0"
 # modern hyper 1.x client is used.
 aws-config = "1"
 aws-sdk-kms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -52,6 +52,7 @@ zeroize = "1.8"
 rustix = { version = "1.1", features = ["process"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 
 [[bin]]

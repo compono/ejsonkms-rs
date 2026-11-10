@@ -94,8 +94,7 @@ impl log::Log for StderrLogger {
     fn flush(&self) {}
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     // Cannot fail: no other logger has been installed yet.
     if log::set_logger(&StderrLogger).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
@@ -116,7 +115,11 @@ async fn main() -> ExitCode {
             file,
         } => (
             "Decryption failed",
-            actions::decrypt_action(&file, aws_region.as_deref(), out.as_deref()).await,
+            block_on(actions::decrypt_action(
+                &file,
+                aws_region.as_deref(),
+                out.as_deref(),
+            )),
         ),
         Command::Keygen {
             kms_key_id,
@@ -125,13 +128,12 @@ async fn main() -> ExitCode {
             show_private_key,
         } => (
             "Key generation failed",
-            actions::keygen_action(
+            block_on(actions::keygen_action(
                 &kms_key_id,
                 aws_region.as_deref(),
                 out.as_deref(),
                 show_private_key,
-            )
-            .await,
+            )),
         ),
         Command::Env {
             quiet,
@@ -139,7 +141,12 @@ async fn main() -> ExitCode {
             file,
         } => (
             "error",
-            actions::env_action(&file, aws_region.as_deref(), quiet, &mut std::io::stdout()).await,
+            block_on(actions::env_action(
+                &file,
+                aws_region.as_deref(),
+                quiet,
+                &mut std::io::stdout(),
+            )),
         ),
     };
 
@@ -150,6 +157,19 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Run a command that talks to KMS.
+///
+/// Each command makes one KMS request, so a single-threaded runtime is
+/// enough, and `encrypt`, which makes none, starts no runtime at all.
+fn block_on(
+    command: impl std::future::Future<Output = Result<(), actions::CliError>>,
+) -> Result<(), actions::CliError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(command)
 }
 
 /// Keep private keys and decrypted secrets out of core dumps.
