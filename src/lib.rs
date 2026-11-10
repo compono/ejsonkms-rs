@@ -18,21 +18,22 @@ pub(crate) use kms::{decrypt_private_key_with_kms, encrypt_private_key_with_kms}
 
 /// Errors that can occur during ejsonkms operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EjsonKmsError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// The file could not be read or written as JSON.
     #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(SourceError),
 
+    /// The file could not be read or written as YAML.
     #[error("yaml error: {0}")]
-    Yaml(#[from] serde_norway::Error),
+    Yaml(SourceError),
 
+    /// The file could not be read or written as TOML.
     #[error("toml error: {0}")]
-    Toml(#[from] toml::de::Error),
-
-    #[error("toml error: {0}")]
-    TomlSer(#[from] toml::ser::Error),
+    Toml(SourceError),
 
     #[error("utf-8 error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
@@ -40,8 +41,9 @@ pub enum EjsonKmsError {
     #[error("missing _private_key_enc field")]
     MissingPrivateKeyEnc,
 
+    /// `_private_key_enc` is not valid base64.
     #[error("base64 decode error: {0}")]
-    Base64(#[from] base64::DecodeError),
+    Base64(SourceError),
 
     #[error("{0}")]
     Kms(String),
@@ -56,6 +58,55 @@ pub enum EjsonKmsError {
     /// write `_private_key_enc` in.
     #[error("unsupported file format: {0}")]
     UnsupportedFormat(FileFormat),
+}
+
+impl EjsonKmsError {
+    pub(crate) fn json(err: serde_json::Error) -> Self {
+        Self::Json(SourceError::new(err))
+    }
+
+    pub(crate) fn yaml(err: serde_norway::Error) -> Self {
+        Self::Yaml(SourceError::new(err))
+    }
+
+    pub(crate) fn toml(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Toml(SourceError::new(err))
+    }
+
+    pub(crate) fn base64(err: base64::DecodeError) -> Self {
+        Self::Base64(SourceError::new(err))
+    }
+}
+
+/// An error from one of the parsers or encoders ejsonkms uses.
+///
+/// The concrete type is hidden so that those crates are not part of the
+/// ejsonkms API; upgrading one of them is then not a breaking change here.
+/// It displays the underlying error's message.
+pub struct SourceError(Box<dyn std::error::Error + Send + Sync + 'static>);
+
+impl SourceError {
+    fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(err))
+    }
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for SourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
 }
 
 /// Keys used in an EjsonKms file.
@@ -153,9 +204,11 @@ pub(crate) fn extract_private_key_enc(
     format: FileFormat,
 ) -> Result<String, EjsonKmsError> {
     let fields: EjsonKmsFileFields = match format {
-        FileFormat::Json => serde_json::from_slice(data)?,
-        FileFormat::Yaml => serde_norway::from_slice(data)?,
-        FileFormat::Toml => toml::from_str(std::str::from_utf8(data)?)?,
+        FileFormat::Json => serde_json::from_slice(data).map_err(EjsonKmsError::json)?,
+        FileFormat::Yaml => serde_norway::from_slice(data).map_err(EjsonKmsError::yaml)?,
+        FileFormat::Toml => {
+            toml::from_str(std::str::from_utf8(data)?).map_err(EjsonKmsError::toml)?
+        }
         // `FileFormat` may gain formats in a minor release of ejson.
         other => return Err(EjsonKmsError::UnsupportedFormat(other)),
     };
@@ -237,6 +290,28 @@ mod tests {
             extract_private_key_enc(&data, FileFormat::Json),
             Err(EjsonKmsError::MissingPrivateKeyEnc)
         ));
+    }
+
+    #[test]
+    fn test_parser_errors_keep_their_message() {
+        let source = serde_json::from_slice::<serde_json::Value>(b"{").unwrap_err();
+        let expected = format!("json error: {source}");
+        let err = extract_private_key_enc(b"{", FileFormat::Json).unwrap_err();
+        assert!(matches!(err, EjsonKmsError::Json(_)));
+        assert_eq!(err.to_string(), expected);
+
+        let err = extract_private_key_enc(b"a: [", FileFormat::Yaml).unwrap_err();
+        assert!(matches!(err, EjsonKmsError::Yaml(_)));
+        assert!(err.to_string().starts_with("yaml error: "), "{err}");
+
+        let err = extract_private_key_enc(b"a = ", FileFormat::Toml).unwrap_err();
+        assert!(matches!(err, EjsonKmsError::Toml(_)));
+        assert!(err.to_string().starts_with("toml error: "), "{err}");
+
+        let source =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, "!").unwrap_err();
+        let err = EjsonKmsError::base64(source.clone());
+        assert_eq!(err.to_string(), format!("base64 decode error: {source}"));
     }
 
     #[test]
