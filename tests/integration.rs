@@ -95,6 +95,21 @@ fn start_mock_kms() -> String {
     format!("http://{addr}")
 }
 
+/// Run the compiled `ejsonkms` binary.
+fn cli(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_ejsonkms"))
+        .args(args)
+        .output()
+        .expect("run ejsonkms")
+}
+
+/// Run the compiled `ejsonkms` binary, expecting success; returns stdout.
+fn cli_ok(args: &[&str]) -> String {
+    let output = cli(args);
+    assert!(output.status.success(), "ejsonkms {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn full_roundtrip_with_mock_kms() {
     let url = start_mock_kms();
@@ -134,8 +149,7 @@ async fn full_roundtrip_with_mock_kms() {
     .unwrap();
 
     let ejson_path_str = ejson_path.to_str().unwrap().to_string();
-    ejsonkms::actions::encrypt_action(std::slice::from_ref(&ejson_path_str))
-        .expect("encrypt should succeed");
+    cli_ok(&["encrypt", &ejson_path_str]);
 
     let encrypted = std::fs::read_to_string(&ejson_path).unwrap();
     assert!(encrypted.contains("EJ["), "secret should be encrypted");
@@ -148,11 +162,22 @@ async fn full_roundtrip_with_mock_kms() {
     let decrypted = String::from_utf8(decrypted).unwrap();
     assert!(decrypted.contains(r#""my_secret": "secret123""#));
 
+    assert_eq!(
+        cli_ok(&["decrypt", "--aws-region", aws_region, &ejson_path_str]),
+        decrypted
+    );
+
     // --- decrypt -o writes the output file with 0600 permissions ---
     let out_path = temp_dir.path().join("decrypted.json");
-    ejsonkms::actions::decrypt_action(&ejson_path_str, aws_region, out_path.to_str())
-        .await
-        .expect("decrypt -o should succeed");
+    let stdout = cli_ok(&[
+        "decrypt",
+        "--aws-region",
+        aws_region,
+        "-o",
+        out_path.to_str().unwrap(),
+        &ejson_path_str,
+    ]);
+    assert_eq!(stdout, "", "decrypt -o should not print the plaintext");
     assert!(std::fs::read_to_string(&out_path)
         .unwrap()
         .contains("secret123"));
@@ -172,9 +197,14 @@ async fn full_roundtrip_with_mock_kms() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&existing_path, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
-    ejsonkms::actions::decrypt_action(&ejson_path_str, aws_region, existing_path.to_str())
-        .await
-        .expect("decrypt -o over an existing file should succeed");
+    cli_ok(&[
+        "decrypt",
+        "--aws-region",
+        aws_region,
+        "-o",
+        existing_path.to_str().unwrap(),
+        &ejson_path_str,
+    ]);
     assert!(std::fs::read_to_string(&existing_path)
         .unwrap()
         .contains("secret123"));
@@ -195,22 +225,20 @@ async fn full_roundtrip_with_mock_kms() {
     assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
 
     // --- env ---
-    let mut output = Vec::new();
-    ejsonkms::actions::env_action(&ejson_path_str, aws_region, false, &mut output)
-        .await
-        .expect("env should succeed");
     assert_eq!(
-        String::from_utf8(output).unwrap(),
+        cli_ok(&["env", "--aws-region", aws_region, &ejson_path_str]),
         "export my_secret='secret123'\n"
     );
 
     // --- env --quiet ---
-    let mut output = Vec::new();
-    ejsonkms::actions::env_action(&ejson_path_str, aws_region, true, &mut output)
-        .await
-        .expect("env --quiet should succeed");
     assert_eq!(
-        String::from_utf8(output).unwrap(),
+        cli_ok(&[
+            "env",
+            "--quiet",
+            "--aws-region",
+            aws_region,
+            &ejson_path_str
+        ]),
         "my_secret='secret123'\n"
     );
 
@@ -222,16 +250,15 @@ async fn full_roundtrip_with_mock_kms() {
         "other": "value"
     });
     std::fs::write(&no_env_path, serde_json::to_string(&contents).unwrap()).unwrap();
-    let mut output = Vec::new();
-    ejsonkms::actions::env_action(
-        no_env_path.to_str().unwrap(),
-        aws_region,
-        false,
-        &mut output,
-    )
-    .await
-    .expect("env without environment key should succeed");
-    assert_eq!(String::from_utf8(output).unwrap(), "");
+    assert_eq!(
+        cli_ok(&[
+            "env",
+            "--aws-region",
+            aws_region,
+            no_env_path.to_str().unwrap()
+        ]),
+        ""
+    );
 
     // --- decrypt a file with no _private_key_enc fails before touching KMS ---
     let err = ejsonkms::decrypt("testdata/test_no_private_key.ejson", aws_region)
@@ -248,8 +275,7 @@ async fn full_roundtrip_with_mock_kms() {
     std::fs::write(&yaml_path, yaml_contents).unwrap();
     let yaml_path_str = yaml_path.to_str().unwrap().to_string();
 
-    ejsonkms::actions::encrypt_action(std::slice::from_ref(&yaml_path_str))
-        .expect("yaml encrypt should succeed");
+    cli_ok(&["encrypt", &yaml_path_str]);
     let encrypted = std::fs::read_to_string(&yaml_path).unwrap();
     assert!(encrypted.contains("EJ["), "yaml secret should be encrypted");
     assert!(!encrypted.contains("secret123"));
@@ -259,12 +285,8 @@ async fn full_roundtrip_with_mock_kms() {
         .expect("yaml decrypt should succeed");
     assert!(String::from_utf8(decrypted).unwrap().contains("secret123"));
 
-    let mut output = Vec::new();
-    ejsonkms::actions::env_action(&yaml_path_str, aws_region, false, &mut output)
-        .await
-        .expect("yaml env should succeed");
     assert_eq!(
-        String::from_utf8(output).unwrap(),
+        cli_ok(&["env", "--aws-region", aws_region, &yaml_path_str]),
         "export my_secret='secret123'\n"
     );
 
@@ -277,8 +299,7 @@ async fn full_roundtrip_with_mock_kms() {
     std::fs::write(&toml_path, toml_contents).unwrap();
     let toml_path_str = toml_path.to_str().unwrap().to_string();
 
-    ejsonkms::actions::encrypt_action(std::slice::from_ref(&toml_path_str))
-        .expect("toml encrypt should succeed");
+    cli_ok(&["encrypt", &toml_path_str]);
     let encrypted = std::fs::read_to_string(&toml_path).unwrap();
     assert!(encrypted.contains("EJ["), "toml secret should be encrypted");
     assert!(!encrypted.contains("secret123"));
@@ -288,20 +309,22 @@ async fn full_roundtrip_with_mock_kms() {
         .expect("toml decrypt should succeed");
     assert!(String::from_utf8(decrypted).unwrap().contains("secret123"));
 
-    let mut output = Vec::new();
-    ejsonkms::actions::env_action(&toml_path_str, aws_region, false, &mut output)
-        .await
-        .expect("toml env should succeed");
     assert_eq!(
-        String::from_utf8(output).unwrap(),
+        cli_ok(&["env", "--aws-region", aws_region, &toml_path_str]),
         "export my_secret='secret123'\n"
     );
 
     // --- keygen -o writes the format matching the file extension ---
     let keygen_yaml = temp_dir.path().join("keygen.eyaml");
-    ejsonkms::actions::keygen_action(kms_key_id, aws_region, keygen_yaml.to_str(), false)
-        .await
-        .expect("keygen to .eyaml should succeed");
+    cli_ok(&[
+        "keygen",
+        "--kms-key-id",
+        kms_key_id,
+        "--aws-region",
+        aws_region,
+        "-o",
+        keygen_yaml.to_str().unwrap(),
+    ]);
     let written: serde_json::Value =
         serde_norway::from_slice::<serde_json::Value>(&std::fs::read(&keygen_yaml).unwrap())
             .expect("keygen output should be valid YAML");
@@ -309,9 +332,15 @@ async fn full_roundtrip_with_mock_kms() {
     assert!(written["_private_key_enc"].is_string());
 
     let keygen_toml = temp_dir.path().join("keygen.etoml");
-    ejsonkms::actions::keygen_action(kms_key_id, aws_region, keygen_toml.to_str(), false)
-        .await
-        .expect("keygen to .etoml should succeed");
+    cli_ok(&[
+        "keygen",
+        "--kms-key-id",
+        kms_key_id,
+        "--aws-region",
+        aws_region,
+        "-o",
+        keygen_toml.to_str().unwrap(),
+    ]);
     let written: toml::Value = toml::from_str(&std::fs::read_to_string(&keygen_toml).unwrap())
         .expect("keygen output should be valid TOML");
     assert!(written["_public_key"].is_str());
@@ -319,12 +348,21 @@ async fn full_roundtrip_with_mock_kms() {
 
     // --- keygen -o refuses to overwrite an existing file ---
     let before = std::fs::read(&ejson_path).unwrap();
-    let err = ejsonkms::actions::keygen_action(kms_key_id, aws_region, ejson_path.to_str(), false)
-        .await
-        .expect_err("keygen over an existing file should fail");
+    let output = cli(&[
+        "keygen",
+        "--kms-key-id",
+        kms_key_id,
+        "--aws-region",
+        aws_region,
+        "-o",
+        &ejson_path_str,
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"");
+    let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        err.to_string().contains("already exists"),
-        "unexpected error: {err}"
+        stderr.starts_with("Key generation failed: ") && stderr.contains("already exists"),
+        "unexpected stderr: {stderr}"
     );
     assert_eq!(std::fs::read(&ejson_path).unwrap(), before);
 

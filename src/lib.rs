@@ -6,11 +6,11 @@
 //! on the KMS key.
 #![forbid(unsafe_code)]
 
-pub mod actions;
 mod kms;
 
-use ejson::{FileFormat, KeySource, Scheme};
-use serde::Deserialize;
+use ejson::env::SecretEnvMap;
+use ejson::{FileFormat, KeySource, Scheme, UnderscorePrefix};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -130,6 +130,34 @@ impl std::fmt::Debug for EjsonKmsKeys {
     }
 }
 
+#[derive(Serialize)]
+struct EjsonKmsFile<'a> {
+    #[serde(rename = "_public_key")]
+    public_key: &'a str,
+    #[serde(rename = "_private_key_enc")]
+    private_key_enc: &'a str,
+}
+
+impl EjsonKmsKeys {
+    /// Render a new, empty secrets file holding these keys: `_public_key`
+    /// and the KMS-encrypted `_private_key_enc`, in the given format.
+    ///
+    /// The unencrypted private key is not part of the document.
+    pub fn to_document(&self, format: FileFormat) -> Result<String, EjsonKmsError> {
+        let file = EjsonKmsFile {
+            public_key: &self.public_key,
+            private_key_enc: &self.private_key_enc,
+        };
+        match format {
+            FileFormat::Json => serde_json::to_string_pretty(&file).map_err(EjsonKmsError::json),
+            FileFormat::Yaml => serde_norway::to_string(&file).map_err(EjsonKmsError::yaml),
+            FileFormat::Toml => toml::to_string(&file).map_err(EjsonKmsError::toml),
+            // `FileFormat` may gain formats in a minor release of ejson.
+            other => Err(EjsonKmsError::UnsupportedFormat(other)),
+        }
+    }
+}
+
 /// Generate keys and prepare an EJSON file with them.
 ///
 /// The generated private key is encrypted with the given KMS key.
@@ -173,6 +201,40 @@ pub async fn decrypt(ejson_file_path: &str, aws_region: &str) -> Result<Vec<u8>,
     )?;
 
     Ok(output)
+}
+
+/// Decrypt an EJSON/EYAML/ETOML file and return the values under its
+/// `environment` key, obtaining the private key via KMS as [`decrypt`] does.
+///
+/// A file with no `environment` key, or one that is not a map, gives an
+/// empty map rather than an error. Write the values as shell assignments
+/// with [`ejson::env::export`].
+pub async fn decrypt_env(
+    ejson_file_path: &str,
+    aws_region: &str,
+) -> Result<SecretEnvMap, EjsonKmsError> {
+    let format = detect_format(ejson_file_path)?;
+    let data = read_file_checked(ejson_file_path)?;
+
+    let private_key_enc = extract_private_key_enc(&data, format)?;
+
+    let kms_decrypted_private_key =
+        decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+
+    let content = ejson::decrypt_bytes_typed(
+        &data,
+        KeySource::PrivateKey(&kms_decrypted_private_key),
+        format,
+        UnderscorePrefix::Keep,
+    )?;
+
+    match ejson::env::extract_env(&content) {
+        Ok(values) => Ok(values),
+        Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
+        Err(e) => Err(EjsonKmsError::Env(format!(
+            "could not load environment from file: {e}"
+        ))),
+    }
 }
 
 /// Detect the file format from the file extension.

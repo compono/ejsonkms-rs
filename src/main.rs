@@ -5,7 +5,7 @@ use std::process::exit;
 
 use clap::{Parser, Subcommand};
 
-use ejsonkms::actions;
+mod actions;
 
 #[derive(Parser)]
 #[command(
