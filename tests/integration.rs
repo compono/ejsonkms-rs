@@ -114,7 +114,7 @@ fn cli_ok(args: &[&str]) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn full_roundtrip_with_mock_kms() {
     let url = start_mock_kms();
-    std::env::set_var("FAKE_AWSKMS_URL", &url);
+    std::env::set_var("AWS_ENDPOINT_URL_KMS", &url);
     std::env::set_var("AWS_ACCESS_KEY_ID", "123");
     std::env::set_var("AWS_SECRET_ACCESS_KEY", "xyz");
 

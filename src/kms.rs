@@ -16,8 +16,8 @@ use crate::{EjsonKmsError, KmsError};
 /// If `aws_region` is `None` (or empty), the default region provider chain
 /// is used (`AWS_REGION`, `AWS_DEFAULT_REGION`, profile, etc.).
 ///
-/// If the `FAKE_AWSKMS_URL` environment variable is set, the client is pointed
-/// at that endpoint instead (used for testing against a local KMS).
+/// The endpoint comes from the AWS SDK's own configuration, so a local KMS
+/// can be used for testing with `AWS_ENDPOINT_URL_KMS`.
 async fn new_kms_client(aws_region: Option<&str>) -> aws_sdk_kms::Client {
     let region_provider = RegionProviderChain::first_try(
         aws_region
@@ -26,15 +26,10 @@ async fn new_kms_client(aws_region: Option<&str>) -> aws_sdk_kms::Client {
     )
     .or_default_provider();
 
-    let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(region_provider);
-
-    if let Ok(fake_kms_endpoint) = std::env::var("FAKE_AWSKMS_URL") {
-        if !fake_kms_endpoint.is_empty() {
-            loader = loader.endpoint_url(fake_kms_endpoint);
-        }
-    }
-
-    let config = loader.load().await;
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .region(region_provider)
+        .load()
+        .await;
     aws_sdk_kms::Client::new(&config)
 }
 
