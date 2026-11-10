@@ -19,6 +19,15 @@ stdout or an unrecognized extension).
 
 ## Install
 
+### Homebrew (macOS & Linux)
+
+```
+brew tap runlevel5/ejsonkms-rs https://github.com/runlevel5/ejsonkms-rs
+brew install ejsonkms
+```
+
+This installs the prebuilt binary published to [Releases](https://github.com/runlevel5/ejsonkms-rs/releases) — no compiler needed.
+
 ### Fedora (COPR)
 
 ejsonkms is packaged in the [tle/power](https://copr.fedorainfracloud.org/coprs/tle/power/) COPR repository:
