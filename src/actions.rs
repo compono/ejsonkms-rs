@@ -11,7 +11,9 @@ use ejson::FileFormat;
 
 use ejsonkms::Error;
 
-use crate::cli::{DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs, RewrapArgs};
+use clap::CommandFactory;
+
+use crate::cli::{Cli, CompletionsArgs, DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs, RewrapArgs};
 
 /// What a command failed with: an [`Error`], or an ejson error from
 /// a step that doesn't involve KMS.
@@ -185,5 +187,20 @@ pub(crate) async fn rewrap(args: &RewrapArgs) -> Result<(), CliError> {
             .await?;
         println!("Rewrapped {}.", file_path.display());
     }
+    Ok(())
+}
+
+/// Print a completion script for `shell`.
+pub(crate) fn completions(args: &CompletionsArgs) -> Result<(), CliError> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    clap_complete::generate(args.shell, &mut command, name, &mut std::io::stdout());
+    Ok(())
+}
+
+/// Print the manual page for `ejsonkms`: the commands, with a pointer to
+/// each one's `--help` for its options.
+pub(crate) fn man() -> Result<(), CliError> {
+    clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
     Ok(())
 }

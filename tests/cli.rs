@@ -798,6 +798,27 @@ fn rewrap_leaves_the_file_alone_when_kms_refuses() {
 }
 
 #[test]
+fn completions_and_man_page_are_generated() {
+    let kms = MockKms::start();
+
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let script = kms.run_ok(&["completions", shell]);
+        assert!(script.contains("ejsonkms"), "{shell}");
+        for command in ["encrypt", "decrypt", "keygen", "env", "rewrap"] {
+            assert!(script.contains(command), "{shell}: no {command}");
+        }
+    }
+    assert_eq!(kms.run(&["completions", "csh"]).code, Some(2));
+
+    let man = kms.run_ok(&["man"]);
+    assert!(man.contains(".TH ejsonkms 1"), "{man}");
+    assert!(man.contains("rewrap"), "{man}");
+
+    // Neither talks to KMS.
+    assert!(kms.requests().is_empty());
+}
+
+#[test]
 fn usage_errors_exit_with_2() {
     let kms = MockKms::start();
 

@@ -59,6 +59,8 @@ fn main() -> ExitCode {
             block_on(actions::env(args, &mut std::io::stdout())),
         ),
         Command::Rewrap(args) => ("Rewrap failed", block_on(actions::rewrap(args))),
+        Command::Completions(args) => ("error", actions::completions(args)),
+        Command::Man => ("error", actions::man()),
     };
 
     match result {

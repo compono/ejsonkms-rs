@@ -139,6 +139,13 @@ secret123
 
 Note that only secrets under the "environment" key will be exported using the `env` command.
 
+### Shell completions and manual page
+
+```
+$ ejsonkms completions zsh > ~/.zfunc/_ejsonkms     # also: bash, fish, powershell, elvish
+$ ejsonkms man > ejsonkms.1
+```
+
 ## Using as a library
 
 The crate is also a library. Turn off the default `cli` feature so the command-line tool's dependencies are

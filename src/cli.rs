@@ -30,6 +30,10 @@ pub(crate) enum Command {
     Env(EnvArgs),
     /// re-encrypt a file's private key with another KMS key
     Rewrap(RewrapArgs),
+    /// print a shell completion script
+    Completions(CompletionsArgs),
+    /// print the manual page (roff)
+    Man,
 }
 
 /// Where to find KMS; shared by every command that calls it.
@@ -194,4 +198,11 @@ impl EnvArgs {
             UnderscorePrefix::Keep
         }
     }
+}
+
+#[derive(Args)]
+pub(crate) struct CompletionsArgs {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    pub(crate) shell: clap_complete::Shell,
 }

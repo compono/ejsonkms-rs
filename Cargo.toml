@@ -43,6 +43,9 @@ zeroize = "1.8"
 
 # Only the command-line tool needs the rest (the `cli` feature).
 clap = { version = "4", features = ["derive", "env"], optional = true }
+# `ejsonkms completions` and `ejsonkms man`
+clap_complete = { version = "4", optional = true }
+clap_mangen = { version = "0.3", optional = true }
 # Warnings from the ejson library, printed to stderr
 log = { version = "0.4", optional = true }
 # Atomic, owner-only output files
@@ -62,7 +65,15 @@ tokio = { version = "1", features = ["rt"] }
 default = ["cli"]
 # The `ejsonkms` command-line tool. Library users can turn it off with
 # `default-features = false` to avoid building its dependencies.
-cli = ["dep:clap", "dep:log", "dep:rustix", "dep:tempfile", "dep:tokio"]
+cli = [
+    "dep:clap",
+    "dep:clap_complete",
+    "dep:clap_mangen",
+    "dep:log",
+    "dep:rustix",
+    "dep:tempfile",
+    "dep:tokio",
+]
 
 [[bin]]
 name = "ejsonkms"
