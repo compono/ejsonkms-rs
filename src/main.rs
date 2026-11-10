@@ -2,7 +2,7 @@
 #![allow(clippy::print_stderr)]
 
 use std::path::PathBuf;
-use std::process::exit;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
@@ -95,7 +95,7 @@ impl log::Log for StderrLogger {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     // Cannot fail: no other logger has been installed yet.
     if log::set_logger(&StderrLogger).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
@@ -107,55 +107,47 @@ async fn main() {
     // plaintext about to be encrypted (encrypt).
     disable_core_dumps();
 
-    match cli.command {
-        Command::Encrypt { files } => {
-            if let Err(err) = actions::encrypt_action(&files) {
-                eprintln!("Encryption failed: {err}");
-                exit(1);
-            }
-        }
+    // What to print before the error if the command fails.
+    let (failure, result) = match cli.command {
+        Command::Encrypt { files } => ("Encryption failed", actions::encrypt_action(&files)),
         Command::Decrypt {
             out,
             aws_region,
             file,
-        } => {
-            if let Err(err) =
-                actions::decrypt_action(&file, aws_region.as_deref(), out.as_deref()).await
-            {
-                eprintln!("Decryption failed: {err}");
-                exit(1);
-            }
-        }
+        } => (
+            "Decryption failed",
+            actions::decrypt_action(&file, aws_region.as_deref(), out.as_deref()).await,
+        ),
         Command::Keygen {
             kms_key_id,
             aws_region,
             out,
             show_private_key,
-        } => {
-            if let Err(err) = actions::keygen_action(
+        } => (
+            "Key generation failed",
+            actions::keygen_action(
                 &kms_key_id,
                 aws_region.as_deref(),
                 out.as_deref(),
                 show_private_key,
             )
-            .await
-            {
-                eprintln!("Key generation failed: {err}");
-                exit(1);
-            }
-        }
+            .await,
+        ),
         Command::Env {
             quiet,
             aws_region,
             file,
-        } => {
-            let mut stdout = std::io::stdout();
-            if let Err(err) =
-                actions::env_action(&file, aws_region.as_deref(), quiet, &mut stdout).await
-            {
-                eprintln!("error: {err}");
-                exit(1);
-            }
+        } => (
+            "error",
+            actions::env_action(&file, aws_region.as_deref(), quiet, &mut std::io::stdout()).await,
+        ),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{failure}: {err}");
+            ExitCode::FAILURE
         }
     }
 }

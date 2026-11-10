@@ -246,22 +246,10 @@ pub async fn decrypt(
     ejson_file_path: impl AsRef<Path>,
     aws_region: Option<&str>,
 ) -> Result<Zeroizing<Vec<u8>>, EjsonKmsError> {
-    let ejson_file_path = ejson_file_path.as_ref();
-    let format = detect_format(ejson_file_path)?;
-    let data = read_file_checked(ejson_file_path)?;
-
-    let private_key_enc = extract_private_key_enc(&data, format)?;
-
-    let kms_decrypted_private_key =
-        decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+    let file = EncryptedFile::open(ejson_file_path.as_ref(), aws_region).await?;
 
     let mut output = Zeroizing::new(Vec::new());
-    ejson::decrypt(
-        &data[..],
-        &mut *output,
-        KeySource::PrivateKey(&kms_decrypted_private_key),
-        format,
-    )?;
+    ejson::decrypt(&file.data[..], &mut *output, file.key(), file.format)?;
 
     Ok(output)
 }
@@ -276,26 +264,42 @@ pub async fn decrypt_env(
     ejson_file_path: impl AsRef<Path>,
     aws_region: Option<&str>,
 ) -> Result<SecretEnvMap, EjsonKmsError> {
-    let ejson_file_path = ejson_file_path.as_ref();
-    let format = detect_format(ejson_file_path)?;
-    let data = read_file_checked(ejson_file_path)?;
+    let file = EncryptedFile::open(ejson_file_path.as_ref(), aws_region).await?;
 
-    let private_key_enc = extract_private_key_enc(&data, format)?;
-
-    let kms_decrypted_private_key =
-        decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
-
-    let content = ejson::decrypt_bytes_typed(
-        &data,
-        KeySource::PrivateKey(&kms_decrypted_private_key),
-        format,
-        UnderscorePrefix::Keep,
-    )?;
+    let content =
+        ejson::decrypt_bytes_typed(&file.data, file.key(), file.format, UnderscorePrefix::Keep)?;
 
     match ejson::env::extract_env(&content) {
         Ok(values) => Ok(values),
         Err(e) if e.is_missing_environment() => Ok(SecretEnvMap::new()),
         Err(e) => Err(EjsonKmsError::Env(e)),
+    }
+}
+
+/// A secrets file read from disk, with its private key recovered via KMS.
+struct EncryptedFile {
+    data: Vec<u8>,
+    format: FileFormat,
+    private_key: Zeroizing<String>,
+}
+
+impl EncryptedFile {
+    /// Read `path` and ask KMS to decrypt its `_private_key_enc`.
+    async fn open(path: &Path, aws_region: Option<&str>) -> Result<Self, EjsonKmsError> {
+        let format = detect_format(path)?;
+        let data = read_file_checked(path)?;
+        let private_key_enc = extract_private_key_enc(&data, format)?;
+        let private_key = decrypt_private_key_with_kms(&private_key_enc, aws_region).await?;
+
+        Ok(Self {
+            data,
+            format,
+            private_key,
+        })
+    }
+
+    fn key(&self) -> KeySource<'_> {
+        KeySource::PrivateKey(&self.private_key)
     }
 }
 
