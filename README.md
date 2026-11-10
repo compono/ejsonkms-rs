@@ -90,6 +90,19 @@ decryption fails without it.
 This is opt-in because older versions of ejsonkms (before 3.0) and the Go tool do not send the context and so
 cannot decrypt such a file.
 
+### Changing the KMS key
+
+`rewrap` re-encrypts a file's private key with another KMS key, without touching the secrets:
+
+```
+$ ejsonkms rewrap --kms-key-id alias/new-key secrets.ejson
+Rewrapped secrets.ejson.
+```
+
+Only the `_private_key_enc` value changes; the keypair, the encrypted values and the file's layout stay as
+they are. You need `kms:Decrypt` on the old key and `kms:Encrypt` on the new one. Add `--bind-public-key` to
+bind an existing file's key to its public key at the same time (see above); a bound key stays bound.
+
 > [!NOTE]
 > If the `AWS_REGION` environment variable is set, it will be used implicitly for `--aws-region` when the
 > flag is not provided. `AWS_DEFAULT_REGION` (and the usual AWS config chain) is used as a further fallback.
@@ -125,6 +138,13 @@ secret123
 ```
 
 Note that only secrets under the "environment" key will be exported using the `env` command.
+
+### Shell completions and manual page
+
+```
+$ ejsonkms completions zsh > ~/.zfunc/_ejsonkms     # also: bash, fish, powershell, elvish
+$ ejsonkms man > ejsonkms.1
+```
 
 ## Using as a library
 

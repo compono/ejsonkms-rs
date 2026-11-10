@@ -10,7 +10,7 @@
 mod common;
 
 use common::{AWS_REGION, DENIED_KEY_ID, DENIED_PLAINTEXT, KMS_KEY_ID, MockKms};
-use ejson::{FileFormat, Scheme};
+use ejson::{FileFormat, Scheme, UnderscorePrefix};
 use ejsonkms::{Client, Error, KeyBinding, KeygenOptions, KmsError};
 use serde_json::json;
 
@@ -100,7 +100,7 @@ async fn library_api(kms: &MockKms) {
 
     // --- decrypt_env ---
     let environment = client
-        .decrypt_env(&secrets)
+        .decrypt_env(&secrets, UnderscorePrefix::Keep)
         .await
         .expect("decrypt_env should succeed");
     let mut exported = Vec::new();
@@ -257,7 +257,7 @@ async fn library_api(kms: &MockKms) {
         json!({ "not valid": "x" }),
     );
     let err = client
-        .decrypt_env(&bad_env)
+        .decrypt_env(&bad_env, UnderscorePrefix::Keep)
         .await
         .expect_err("decrypt_env should reject an invalid variable name");
     assert!(

@@ -17,7 +17,9 @@
 //!
 //! // ... and later decrypt the file.
 //! let plaintext = client.decrypt("secrets.ejson").await?;
-//! let environment = client.decrypt_env("secrets.ejson").await?;
+//! let environment = client
+//!     .decrypt_env("secrets.ejson", ejson::UnderscorePrefix::Keep)
+//!     .await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -28,6 +30,7 @@ mod document;
 mod error;
 mod keys;
 mod kms;
+mod rewrap;
 
 pub use client::{Client, ClientBuilder};
 pub use error::{Error, KmsError, SourceError};
@@ -39,3 +42,4 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[deprecated(since = "3.0.0", note = "renamed to `ejsonkms::Error`")]
 pub type EjsonKmsError = Error;
 pub use keys::{EjsonKmsKeys, KeyBinding, KeygenOptions};
+pub use rewrap::RewrapError;

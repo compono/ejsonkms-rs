@@ -3,7 +3,6 @@
 use aws_config::BehaviorVersion;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_kms::config::Region;
-use aws_sdk_kms::error::DisplayErrorContext;
 use aws_sdk_kms::primitives::Blob;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -103,7 +102,7 @@ pub(crate) async fn encrypt_private_key_with_kms(
 ///
 /// The SDK's own `Display` says only "service error" or "dispatch failure";
 /// the useful part (the exception name and message, or the network error)
-/// is in the sources, which `DisplayErrorContext` writes out.
+/// is in the sources.
 #[derive(Debug)]
 struct SdkFailure<E> {
     message: String,
@@ -124,7 +123,64 @@ impl<E: std::error::Error + 'static> std::error::Error for SdkFailure<E> {
 
 fn sdk_failure<E: std::error::Error + Send + Sync + 'static>(source: E) -> SourceError {
     SourceError::new(SdkFailure {
-        message: DisplayErrorContext(&source).to_string(),
+        message: error_chain(&source),
         source,
     })
+}
+
+/// `error`'s message followed by those of its sources, separated by ": ".
+///
+/// A cause whose message the previous one already ends with is skipped, so
+/// a wrapper that repeats its source is not printed twice.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_message = cause.to_string();
+        if !cause_message.is_empty() && !message.ends_with(&cause_message) {
+            message.push_str(": ");
+            message.push_str(&cause_message);
+        }
+        source = cause.source();
+    }
+    message
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|layer| layer as _)
+        }
+    }
+
+    #[test]
+    fn test_error_chain_joins_causes_once() {
+        let error = Layer(
+            "service error",
+            Some(Box::new(Layer(
+                "AccessDeniedException: not authorized",
+                Some(Box::new(Layer("not authorized", None))),
+            ))),
+        );
+        assert_eq!(
+            error_chain(&error),
+            "service error: AccessDeniedException: not authorized"
+        );
+        assert_eq!(
+            error_chain(&Layer("dispatch failure", None)),
+            "dispatch failure"
+        );
+    }
 }

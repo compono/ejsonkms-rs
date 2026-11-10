@@ -120,7 +120,14 @@ pub struct Output {
 /// Build the `_private_key_enc` the mock would produce for `plaintext`
 /// encrypted under `context`.
 pub fn wrap(plaintext: &[u8], context: &Value) -> String {
-    BASE64.encode(envelope(&BASE64.encode(plaintext), context))
+    BASE64.encode(envelope(&BASE64.encode(plaintext), context, KMS_KEY_ID))
+}
+
+/// The KMS key id a `_private_key_enc` produced by the mock was encrypted with.
+pub fn key_id_of(private_key_enc: &str) -> String {
+    let envelope: Value = serde_json::from_slice(&BASE64.decode(private_key_enc).unwrap())
+        .expect("not a mock KMS ciphertext");
+    envelope["key_id"].as_str().unwrap().to_string()
 }
 
 /// Open a `_private_key_enc` produced by the mock: the plaintext and the
@@ -134,8 +141,8 @@ pub fn unwrap(private_key_enc: &str) -> (Vec<u8>, Value) {
     (plaintext, envelope["context"].clone())
 }
 
-fn envelope(plaintext_base64: &str, context: &Value) -> Vec<u8> {
-    json!({ "plaintext": plaintext_base64, "context": context })
+fn envelope(plaintext_base64: &str, context: &Value, key_id: &str) -> Vec<u8> {
+    json!({ "plaintext": plaintext_base64, "context": context, "key_id": key_id })
         .to_string()
         .into_bytes()
 }
@@ -161,7 +168,8 @@ fn respond(operation: &str, body: &Value) -> (u16, Value) {
                 );
             }
             let plaintext = body["Plaintext"].as_str().unwrap_or_default();
-            let ciphertext = BASE64.encode(envelope(plaintext, &context_of(body)));
+            let key_id = body["KeyId"].as_str().unwrap_or_default();
+            let ciphertext = BASE64.encode(envelope(plaintext, &context_of(body), key_id));
             (
                 200,
                 json!({ "CiphertextBlob": ciphertext, "KeyId": KEY_ARN }),

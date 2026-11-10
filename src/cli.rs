@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
-use ejson::Scheme;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use ejson::env::{ExportStyle, Shell};
+use ejson::{Scheme, UnderscorePrefix};
 use ejsonkms::{Client, KeyBinding, KeygenOptions};
 
 #[derive(Parser)]
@@ -27,6 +28,12 @@ pub(crate) enum Command {
     Keygen(KeygenArgs),
     /// print shell export statements
     Env(EnvArgs),
+    /// re-encrypt a file's private key with another KMS key
+    Rewrap(RewrapArgs),
+    /// print a shell completion script
+    Completions(CompletionsArgs),
+    /// print the manual page (roff)
+    Man,
 }
 
 /// Where to find KMS; shared by every command that calls it.
@@ -113,10 +120,89 @@ impl KeygenArgs {
 pub(crate) struct EnvArgs {
     /// Suppress export statement
     #[arg(short, long)]
-    pub(crate) quiet: bool,
+    quiet: bool,
     #[command(flatten)]
     pub(crate) aws: AwsArgs,
+    /// Shell syntax to emit
+    #[arg(long = "shell", value_enum, default_value_t = ShellArg::Posix)]
+    shell: ShellArg,
+    /// Remove the leading underscore from variable names (`_HOST` is
+    /// exported as `HOST`)
+    #[arg(long = "trim-underscore-prefix")]
+    trim_underscore_prefix: bool,
     /// EJSON file to read secrets from
     #[arg(value_name = "FILE")]
     pub(crate) file: PathBuf,
+}
+
+#[derive(Args)]
+pub(crate) struct RewrapArgs {
+    /// KMS Key ID to encrypt the private key with from now on
+    #[arg(long = "kms-key-id")]
+    pub(crate) kms_key_id: String,
+    #[command(flatten)]
+    pub(crate) aws: AwsArgs,
+    /// also bind the encrypted private key to the public key with a KMS
+    /// encryption context (not readable by ejsonkms before 3.0 or the
+    /// Go tool); without this the file's current binding is kept
+    #[arg(long = "bind-public-key")]
+    bind_public_key: bool,
+    /// EJSON file(s) to rewrap
+    #[arg(value_name = "FILE", required = true)]
+    pub(crate) files: Vec<PathBuf>,
+}
+
+impl RewrapArgs {
+    /// The binding the flags ask for, or `None` to keep the file's own.
+    pub(crate) fn binding(&self) -> Option<KeyBinding> {
+        self.bind_public_key.then_some(KeyBinding::PublicKey)
+    }
+}
+
+/// Which shell syntax `env` writes.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ShellArg {
+    /// POSIX-compatible shells (bash, zsh, sh, ...): `export KEY='value'`
+    Posix,
+    /// Fish shell: `set -gx KEY 'value'`
+    Fish,
+    /// Fish syntax if `$FISH_VERSION` is set, otherwise POSIX. Fish doesn't
+    /// export it, so under fish this is usually POSIX, which fish also accepts.
+    Auto,
+}
+
+impl EnvArgs {
+    /// The shell syntax to write.
+    pub(crate) fn shell(&self) -> Shell {
+        match self.shell {
+            ShellArg::Posix => Shell::Posix,
+            ShellArg::Fish => Shell::Fish,
+            ShellArg::Auto => Shell::detect(),
+        }
+    }
+
+    /// Whether to export the variables or only assign them.
+    pub(crate) fn style(&self) -> ExportStyle {
+        if self.quiet {
+            ExportStyle::Unexported
+        } else {
+            ExportStyle::Exported
+        }
+    }
+
+    /// What to do with a leading underscore in variable names.
+    pub(crate) fn underscore_prefix(&self) -> UnderscorePrefix {
+        if self.trim_underscore_prefix {
+            UnderscorePrefix::Trim
+        } else {
+            UnderscorePrefix::Keep
+        }
+    }
+}
+
+#[derive(Args)]
+pub(crate) struct CompletionsArgs {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    pub(crate) shell: clap_complete::Shell,
 }

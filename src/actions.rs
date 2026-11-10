@@ -8,11 +8,12 @@ use std::io::Write;
 use std::path::Path;
 
 use ejson::FileFormat;
-use ejson::env::{ExportStyle, Shell};
 
 use ejsonkms::Error;
 
-use crate::cli::{DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs};
+use clap::CommandFactory;
+
+use crate::cli::{Cli, CompletionsArgs, DecryptArgs, EncryptArgs, EnvArgs, KeygenArgs, RewrapArgs};
 
 /// What a command failed with: an [`Error`], or an ejson error from
 /// a step that doesn't involve KMS.
@@ -165,16 +166,41 @@ fn already_exists(path: &Path) -> std::io::Error {
 /// Decrypt an EJSON file and write shell export statements for the values
 /// under its `environment` key.
 pub(crate) async fn env<W: Write>(args: &EnvArgs, output: &mut W) -> Result<(), CliError> {
-    let style = if args.quiet {
-        ExportStyle::Unexported
-    } else {
-        ExportStyle::Exported
-    };
+    let env_values = args
+        .aws
+        .client()
+        .await
+        .decrypt_env(&args.file, args.underscore_prefix())
+        .await?;
 
-    let env_values = args.aws.client().await.decrypt_env(&args.file).await?;
+    // ejson quotes values so that POSIX shells and fish read them identically.
+    ejson::env::export(output, &env_values, args.shell(), args.style())?;
+    Ok(())
+}
 
-    // POSIX `export KEY='value'` syntax, as before. ejson quotes values so
-    // that fish reads them identically.
-    ejson::env::export(output, &env_values, Shell::Posix, style)?;
+/// Re-encrypt the private key of one or more files with another KMS key.
+pub(crate) async fn rewrap(args: &RewrapArgs) -> Result<(), CliError> {
+    let client = args.aws.client().await;
+    for file_path in &args.files {
+        client
+            .rewrap(file_path, &args.kms_key_id, args.binding())
+            .await?;
+        println!("Rewrapped {}.", file_path.display());
+    }
+    Ok(())
+}
+
+/// Print a completion script for `shell`.
+pub(crate) fn completions(args: &CompletionsArgs) -> Result<(), CliError> {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    clap_complete::generate(args.shell, &mut command, name, &mut std::io::stdout());
+    Ok(())
+}
+
+/// Print the manual page for `ejsonkms`: the commands, with a pointer to
+/// each one's `--help` for its options.
+pub(crate) fn man() -> Result<(), CliError> {
+    clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
     Ok(())
 }
