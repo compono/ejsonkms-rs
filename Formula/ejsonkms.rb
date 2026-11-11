@@ -9,22 +9,22 @@ class Ejsonkms < Formula
   on_macos do
     on_arm do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-aarch64-apple-darwin.tar.xz"
-      sha256 "9c1cf53f7550faff4d64180377917e6c4c394714d00e1cce18f83fe36d38f495"
+      sha256 "b28d264da02104657ce1e00b7c3fd9531d47ab7fd0ad1f39707984a43cb43a0a"
     end
     on_intel do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-x86_64-apple-darwin.tar.xz"
-      sha256 "633ce1693ec02503189092c65c9b1921e8d78f3e15276bbce8a7195822d0cc84"
+      sha256 "d2a4b6b5c066a369956e4f4a7d93ee52fdd5192ccaaffe36e1959cb16e797844"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-aarch64-unknown-linux-gnu.tar.xz"
-      sha256 "309de24eb49e0d863478f2b01f0989537c404a2984456c7c12090ebc00c0cbc2"
+      sha256 "fa666c8a856a9871ed7b53427fbf27138f95243c7a98ac94e773d4397192587c"
     end
     on_intel do
       url "https://github.com/runlevel5/ejsonkms-rs/releases/download/v#{version}/ejsonkms-#{version}-x86_64-unknown-linux-gnu.tar.xz"
-      sha256 "db6f13c26e5f9fa27bf55668e43312e608e337f578a8fa8e3b40250ff57c233e"
+      sha256 "f1e1f1b62b78c4262cfb5ba35631297d44bf3a2fd02c2bec43ea77c2f2def8d0"
     end
   end
 
