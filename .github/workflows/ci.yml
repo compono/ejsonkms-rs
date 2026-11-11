@@ -43,6 +43,18 @@ jobs:
       - name: Run tests
         run: cargo test --locked --verbose
 
+  # One check named "Test" for the branch ruleset to require. The matrix
+  # jobs above are called "Test - <os>", so a required check called "Test"
+  # would otherwise never report and the pull request would wait forever.
+  test-all:
+    name: Test
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every platform passed
+        run: test "${{ needs.test.result }}" = success
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

@@ -5,10 +5,9 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+  # Every pull request, not only ones that touch the manifests: this is a
+  # required check, and a required check that doesn't run blocks the merge.
   pull_request:
-    paths:
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
   # New advisories are published against dependencies that haven't changed,
   # so also audit daily.
   schedule:
