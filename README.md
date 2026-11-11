@@ -175,12 +175,18 @@ external services are needed:
 cargo test
 ```
 
-To test the CLI manually against a real (fake) KMS, a
-[local-kms](https://github.com/nsmithuk/local-kms) service seeded with a test
-key is provided:
+A [local-kms](https://github.com/nsmithuk/local-kms) service seeded with two test keys is provided. Unlike
+the mock used by `cargo test`, it really encrypts and enforces encryption contexts. CI runs an end-to-end check
+of the binary against it, which you can run yourself:
 
 ```
 docker compose up -d awskms
+cargo build && tests/local-kms.sh target/debug/ejsonkms
+```
+
+To try the CLI against it by hand:
+
+```
 export AWS_ENDPOINT_URL_KMS=http://localhost:8080
 export AWS_ACCESS_KEY_ID=123 AWS_SECRET_ACCESS_KEY=xyz AWS_REGION=us-east-1
 ejsonkms keygen --kms-key-id bc436485-5092-42b8-92a3-0aa8b93536dc -o secrets.ejson

@@ -158,3 +158,42 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+
+  # The binary against local-kms, a KMS emulator that really encrypts and
+  # enforces encryption contexts. `cargo test` uses an in-process mock that
+  # only imitates that, so this is what keeps --bind-public-key and rewrap
+  # honest. Linux only: the emulator runs in Docker.
+  local-kms:
+    name: Local KMS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Start local-kms
+        run: docker compose up -d awskms
+
+      - name: Check against local-kms
+        run: tests/local-kms.sh target/debug/ejsonkms
+
+      - name: Show local-kms logs
+        if: failure()
+        run: docker compose logs awskms
