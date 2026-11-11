@@ -1,0 +1,68 @@
+name: Homebrew formula
+
+# Install and test the formula with Homebrew itself whenever it, or the
+# workflow that generates it on release, changes.
+on:
+  pull_request:
+    paths:
+      - 'Formula/**'
+      - '.github/workflows/formula.yml'
+      - '.github/workflows/homebrew-formula.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Formula/**'
+      - '.github/workflows/formula.yml'
+      - '.github/workflows/homebrew-formula.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+
+jobs:
+  install:
+    name: brew install - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Homebrew is installed on the Linux runners but not on PATH.
+      - name: Put Homebrew on PATH (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "$HOMEBREW_PREFIX/bin" >> "$GITHUB_PATH"
+
+      # Homebrew only installs formulae that live in a tap.
+      - name: Put the formula in a local tap
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git local/ejsonkms
+          cp Formula/ejsonkms.rb "$(brew --repository local/ejsonkms)/Formula/ejsonkms.rb"
+
+      - name: Install
+        run: brew install local/ejsonkms/ejsonkms
+
+      - name: Test
+        run: brew test local/ejsonkms/ejsonkms
+
+      - name: Check what was installed
+        run: |
+          set -euo pipefail
+          prefix=$(brew --prefix)
+          ejsonkms --version
+          test -s "$prefix/share/man/man1/ejsonkms.1"
+          test -s "$prefix/etc/bash_completion.d/ejsonkms"
+          test -s "$prefix/share/zsh/site-functions/_ejsonkms"
+          test -s "$prefix/share/fish/vendor_completions.d/ejsonkms.fish"

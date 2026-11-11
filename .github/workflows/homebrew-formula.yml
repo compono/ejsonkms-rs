@@ -100,10 +100,14 @@ jobs:
 
             def install
               bin.install "ejsonkms"
+              generate_completions_from_executable(bin/"ejsonkms", "completions")
+              (man1/"ejsonkms.1").write Utils.safe_popen_read(bin/"ejsonkms", "man")
             end
 
             test do
               assert_match version.to_s, shell_output("#{bin}/ejsonkms --version")
+              assert_match "rewrap", shell_output("#{bin}/ejsonkms completions bash")
+              assert_path_exists man1/"ejsonkms.1"
             end
           end
           EOF

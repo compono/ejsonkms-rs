@@ -27,7 +27,8 @@ brew tap runlevel5/ejsonkms-rs https://github.com/runlevel5/ejsonkms-rs
 brew install ejsonkms
 ```
 
-This installs the prebuilt binary published to [Releases](https://github.com/runlevel5/ejsonkms-rs/releases) — no compiler needed.
+This installs the prebuilt binary published to [Releases](https://github.com/runlevel5/ejsonkms-rs/releases) — no compiler needed —
+along with shell completions for bash, zsh and fish and the `ejsonkms(1)` manual page.
 
 ### Fedora (COPR)
 
