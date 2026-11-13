@@ -2,7 +2,7 @@
 name = "ejsonkms"
 version = "3.1.0"
 edition = "2024"
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using EJSON & AWS KMS"
 license = "MIT"
