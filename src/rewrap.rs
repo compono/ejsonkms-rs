@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::io::Write;
+use std::mem::DropGuard;
 use std::path::Path;
 
 use ejson::FileFormat;
@@ -145,22 +146,27 @@ pub(crate) fn replace_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
     name.push(format!(".rewrap-{}.tmp", std::process::id()));
     let temp_path = parent.join(name);
 
-    let result = (|| {
-        let mut temp = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
-        temp.set_permissions(permissions)?;
-        temp.write_all(data)?;
-        temp.sync_all()?;
-        drop(temp);
-        fs::rename(&temp_path, path)
-    })();
+    let temp = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)?;
 
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
+    // Remove the temporary file unless the rename succeeds, on an error and
+    // on a panic alike.
+    let temp_path = DropGuard::new(temp_path, |temp_path| {
+        let _ = fs::remove_file(temp_path);
+    });
+    // Declared after the guard so that the file is closed before the guard
+    // removes it: Windows may refuse to delete a file that is still open.
+    let mut temp = temp;
+
+    temp.set_permissions(permissions)?;
+    temp.write_all(data)?;
+    temp.sync_all()?;
+    drop(temp);
+    fs::rename(&*temp_path, path)?;
+    DropGuard::dismiss(temp_path);
+    Ok(())
 }
 
 #[cfg(test)]
